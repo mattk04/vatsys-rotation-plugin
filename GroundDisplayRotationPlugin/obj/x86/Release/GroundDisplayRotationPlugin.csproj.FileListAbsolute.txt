@@ -1,0 +1,5 @@
+c:\Users\matt\Documents\GitHub\vatsys-rotation-plugin\GroundDisplayRotationPlugin\obj\x86\Release\GroundDisplayRotationPlugin.csprojResolveAssemblyReference.cache
+c:\Users\matt\Documents\GitHub\vatsys-rotation-plugin\GroundDisplayRotationPlugin\bin\Release\GroundDisplayRotationPlugin.dll
+c:\Users\matt\Documents\GitHub\vatsys-rotation-plugin\GroundDisplayRotationPlugin\bin\Release\GroundDisplayRotationPlugin.pdb
+c:\Users\matt\Documents\GitHub\vatsys-rotation-plugin\GroundDisplayRotationPlugin\obj\x86\Release\GroundDisplayRotationPlugin.dll
+c:\Users\matt\Documents\GitHub\vatsys-rotation-plugin\GroundDisplayRotationPlugin\obj\x86\Release\GroundDisplayRotationPlugin.pdb
