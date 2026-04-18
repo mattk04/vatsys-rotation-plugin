@@ -2,8 +2,7 @@
 
 ## What it does
 
-This plugin adds a new menu item in the ASD ground display Tools menu called `Ground Rotation`.
-Controllers can enter a rotation angle via a menu item textbox and the plugin updates the current ASD position rotation and reloads the display.
+This plugin adds a new menu item in the ground window, allowing controllers to enter a rotation angle and rotate the display.
 
 ## Build
 
