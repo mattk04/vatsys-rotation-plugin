@@ -2,7 +2,14 @@
 
 ## What it does
 
-This plugin adds a new menu item in the ground window, allowing controllers to enter a rotation angle and rotate the display.
+This plugin adds a `Rotate View` submenu under `Tools` in Ground (ASMGCS) windows.
+
+From that submenu controllers can:
+
+- Select `Set Rotation Heading` and enter a heading from `000` to `359`.
+- Select `Reset to Original` to return to the initially loaded heading for the active position.
+
+Rotation changes are applied to the specific ground window/control that invoked the command.
 
 ## Build
 
@@ -12,7 +19,7 @@ This plugin adds a new menu item in the ground window, allowing controllers to e
 If you are using the local MSBuild on Windows, run:
 
 ```powershell
-& 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe' .\GroundDisplayRotationPlugin.csproj /p:Configuration=Release
+& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe' .\GroundDisplayRotationPlugin.csproj /p:Configuration=Release
 ```
 
 ## Install
@@ -21,10 +28,10 @@ If you are using the local MSBuild on Windows, run:
    - Usually: `C:\Program Files (x86)\vatSys\bin\Plugins`
 2. Restart vatSys.
 3. Open a Ground Display (ASD) window.
-4. Open `Tools > Ground Rotation` and choose an angle.
+4. Open `Tools > Rotate View`.
 
 ## Notes
 
 - The project currently references `C:\Program Files (x86)\vatSys\bin\vatSys.exe`.
 - If your vatSys installation path is different, update `GroundDisplayRotationPlugin.csproj`.
-- The plugin uses the `ASD` window menu registration API from vatSys.
+- The plugin targets .NET Framework 4.7.2 and is built as `x86`.
