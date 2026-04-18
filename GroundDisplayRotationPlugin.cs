@@ -22,6 +22,7 @@ namespace GroundDisplayRotationPlugin
         private readonly Dictionary<object, Dictionary<object, float>> originalRotationByPosition = new Dictionary<object, Dictionary<object, float>>(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<object, int> lastAngleByGroundControl = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<Form, ToolStripMenuItem> rotationMenusByForm = new Dictionary<Form, ToolStripMenuItem>();
+        private readonly HashSet<HeadingInputHost> styledRotationInputs = new HashSet<HeadingInputHost>();
         private readonly Timer menuInjectionTimer = new Timer();
 
         public string Name
@@ -202,11 +203,16 @@ namespace GroundDisplayRotationPlugin
                 rotationMenu.ShowCheckMargin = false;
             }
 
-            var setAngleRootItem = new ToolStripMenuItem("Set Rotation Heading")
+            var headingLabel = new ToolStripMenuItem("Magnetic Heading")
             {
-                CheckOnClick = false
+                Enabled = false
             };
-            setAngleRootItem.Click += SetRotationAngleMenuItem_Click;
+            var headingInput = new HeadingInputHost();
+            headingInput.InputTextBox.Text = "000";
+            headingInput.InputTextBox.Font = headingLabel.Font;
+            headingInput.InputTextBox.KeyDown += HeadingInput_KeyDown;
+            headingInput.InputTextBox.Leave += HeadingInput_Leave;
+            headingInput.InputTextBox.Tag = headingInput;
 
             var resetRootItem = new ToolStripMenuItem("Reset to Original")
             {
@@ -215,10 +221,14 @@ namespace GroundDisplayRotationPlugin
             };
             resetRootItem.Click += RotationMenuItem_Click;
 
-            rotationRoot.DropDownItems.Add(setAngleRootItem);
+            rotationRoot.DropDownItems.Add(headingLabel);
+            rotationRoot.DropDownItems.Add(headingInput);
             rotationRoot.DropDownItems.Add(new ToolStripSeparator());
             rotationRoot.DropDownItems.Add(resetRootItem);
+
             resetItems.Add(resetRootItem);
+            rotationRoot.DropDownOpening += RotationRoot_DropDownOpening;
+            rotationRoot.DropDownOpened += RotationRoot_DropDownOpened;
 
             return rotationRoot;
         }
@@ -231,6 +241,73 @@ namespace GroundDisplayRotationPlugin
         public void OnRadarTrackUpdate(RDP.RadarTrack updated)
         {
             // Nothing required for this plugin on radar track updates.
+        }
+
+        private void RotationRoot_DropDownOpening(object sender, EventArgs e)
+        {
+            ToolStripMenuItem rotationRoot = sender as ToolStripMenuItem;
+            if (rotationRoot == null)
+            {
+                return;
+            }
+
+            HeadingInputHost headingInput = GetHeadingInput(rotationRoot);
+            if (headingInput == null)
+            {
+                return;
+            }
+
+            Form ownerForm = GetOwnerForm(rotationRoot);
+            if (ownerForm == null)
+            {
+                return;
+            }
+
+            object groundControl = GetGroundControl(ownerForm);
+            if (groundControl == null)
+            {
+                return;
+            }
+
+            int prefilledAngle;
+            if (!TryGetCurrentMagneticHeading(groundControl, out prefilledAngle))
+            {
+                int savedAngle;
+                if (lastAngleByGroundControl.TryGetValue(groundControl, out savedAngle))
+                {
+                    prefilledAngle = savedAngle;
+                }
+                else
+                {
+                    prefilledAngle = 0;
+                }
+            }
+
+            headingInput.InputTextBox.Text = prefilledAngle.ToString("D3");
+            EnsureHeadingInputStyled(ownerForm, rotationRoot, headingInput, false);
+        }
+
+        private void RotationRoot_DropDownOpened(object sender, EventArgs e)
+        {
+            ToolStripMenuItem rotationRoot = sender as ToolStripMenuItem;
+            if (rotationRoot == null)
+            {
+                return;
+            }
+
+            HeadingInputHost headingInput = GetHeadingInput(rotationRoot);
+            if (headingInput == null)
+            {
+                return;
+            }
+
+            Form ownerForm = GetOwnerForm(rotationRoot);
+            if (ownerForm == null)
+            {
+                return;
+            }
+
+            EnsureHeadingInputStyled(ownerForm, rotationRoot, headingInput, true);
         }
 
         private void RotationMenuItem_Click(object sender, EventArgs e)
@@ -293,17 +370,94 @@ namespace GroundDisplayRotationPlugin
             }
         }
 
-        private void SetRotationAngleMenuItem_Click(object sender, EventArgs e)
+        private void HeadingInput_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Enter)
+            {
+                return;
+            }
+
+            TextBox textBox = sender as TextBox;
+            HeadingInputHost headingInput = textBox == null ? null : textBox.Tag as HeadingInputHost;
+            if (headingInput == null)
+            {
+                return;
+            }
+
+            ApplyRotationFromInlineInput(headingInput, true);
+            RemoveFocusFromHeadingInput(headingInput);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        }
+
+        private void RemoveFocusFromHeadingInput(HeadingInputHost headingInput)
+        {
+            if (headingInput == null)
+            {
+                return;
+            }
+
+            Form ownerForm = GetOwnerForm(headingInput);
+            if (ownerForm == null)
+            {
+                return;
+            }
+
+            object groundControl = GetGroundControl(ownerForm);
+            Control groundDisplayControl = groundControl as Control;
+            if (groundDisplayControl != null && !groundDisplayControl.IsDisposed && groundDisplayControl.CanFocus)
+            {
+                groundDisplayControl.BeginInvoke((MethodInvoker)delegate
+                {
+                    if (!groundDisplayControl.IsDisposed && groundDisplayControl.CanFocus)
+                    {
+                        groundDisplayControl.Focus();
+                    }
+                });
+                return;
+            }
+
+            ownerForm.BeginInvoke((MethodInvoker)delegate
+            {
+                if (!ownerForm.IsDisposed && ownerForm.CanFocus)
+                {
+                    ownerForm.Focus();
+                }
+            });
+        }
+
+        private void HeadingInput_Leave(object sender, EventArgs e)
+        {
+            TextBox textBox = sender as TextBox;
+            HeadingInputHost headingInput = textBox == null ? null : textBox.Tag as HeadingInputHost;
+            if (headingInput == null)
+            {
+                return;
+            }
+
+            ApplyRotationFromInlineInput(headingInput, false);
+        }
+
+        private void ApplyRotationFromInlineInput(HeadingInputHost headingInput, bool notifyOnInvalidInput)
         {
             try
             {
-                ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
-                if (clickedItem == null)
+                if (headingInput == null)
                 {
                     return;
                 }
 
-                Form ownerForm = GetOwnerForm(clickedItem);
+                int selectedAngle;
+                if (!TryParseAngle(headingInput.InputTextBox.Text, out selectedAngle))
+                {
+                    if (notifyOnInvalidInput)
+                    {
+                        MessageBox.Show("Please enter a whole number between 000 and 359.", "Ground Rotation Input");
+                    }
+                    return;
+                }
+
+                Form ownerForm = GetOwnerForm(headingInput);
                 if (ownerForm == null)
                 {
                     return;
@@ -315,28 +469,11 @@ namespace GroundDisplayRotationPlugin
                     return;
                 }
 
-                int prefilledAngle = 0;
-                int savedAngle;
-                if (lastAngleByGroundControl.TryGetValue(groundControl, out savedAngle))
-                {
-                    prefilledAngle = savedAngle;
-                }
-
-                int selectedAngle;
-                if (!TryPromptForAngle(prefilledAngle, out selectedAngle))
-                {
-                    return;
-                }
-
                 lastAngleByGroundControl[groundControl] = selectedAngle;
                 ApplyRotation(groundControl, selectedAngle);
                 UpdateCheckedState(selectedAngle);
 
-                ToolStripDropDown dropDown = clickedItem.GetCurrentParent() as ToolStripDropDown;
-                if (dropDown != null)
-                {
-                    dropDown.Close(ToolStripDropDownCloseReason.ItemClicked);
-                }
+                headingInput.InputTextBox.Text = selectedAngle.ToString("D3");
             }
             catch (Exception ex)
             {
@@ -344,62 +481,262 @@ namespace GroundDisplayRotationPlugin
             }
         }
 
-        private bool TryPromptForAngle(int initialAngle, out int selectedAngle)
+        private HeadingInputHost GetHeadingInput(ToolStripMenuItem rotationRoot)
         {
-            selectedAngle = initialAngle;
-
-            using (Form prompt = new Form())
-            using (TextBox input = new TextBox())
-            using (Button ok = new Button())
-            using (Button cancel = new Button())
+            if (rotationRoot == null)
             {
-                prompt.Text = "Ground Rotation Angle";
-                prompt.FormBorderStyle = FormBorderStyle.FixedDialog;
-                prompt.StartPosition = FormStartPosition.CenterParent;
-                prompt.MinimizeBox = false;
-                prompt.MaximizeBox = false;
-                prompt.ClientSize = new Size(240, 92);
-                prompt.ShowInTaskbar = false;
+                return null;
+            }
 
-                Label label = new Label();
-                label.Text = "Enter Magnetic Heading (000-359):";
-                label.AutoSize = true;
-                label.Location = new Point(10, 10);
-
-                input.Location = new Point(12, 30);
-                input.Width = 214;
-                input.Text = initialAngle.ToString("D3");
-
-                ok.Text = "OK";
-                ok.DialogResult = DialogResult.OK;
-                ok.Location = new Point(70, 60);
-
-                cancel.Text = "Cancel";
-                cancel.DialogResult = DialogResult.Cancel;
-                cancel.Location = new Point(145, 60);
-
-                prompt.Controls.Add(label);
-                prompt.Controls.Add(input);
-                prompt.Controls.Add(ok);
-                prompt.Controls.Add(cancel);
-                prompt.AcceptButton = ok;
-                prompt.CancelButton = cancel;
-
-                if (prompt.ShowDialog() != DialogResult.OK)
+            foreach (ToolStripItem item in rotationRoot.DropDownItems)
+            {
+                HeadingInputHost headingInput = item as HeadingInputHost;
+                if (headingInput != null)
                 {
-                    return false;
+                    return headingInput;
+                }
+            }
+
+            return null;
+        }
+
+        private ToolStripMenuItem GetHeadingLabel(ToolStripMenuItem rotationRoot)
+        {
+            if (rotationRoot == null)
+            {
+                return null;
+            }
+
+            foreach (ToolStripItem item in rotationRoot.DropDownItems)
+            {
+                ToolStripMenuItem labelItem = item as ToolStripMenuItem;
+                if (labelItem != null && string.Equals(labelItem.Text, "Magnetic Heading", StringComparison.Ordinal))
+                {
+                    return labelItem;
+                }
+            }
+
+            return null;
+        }
+
+        private void EnsureHeadingInputStyled(Form ownerForm, ToolStripMenuItem rotationRoot, HeadingInputHost headingInput, bool force)
+        {
+            if (ownerForm == null || headingInput == null || rotationRoot == null)
+            {
+                return;
+            }
+
+            if (!force && styledRotationInputs.Contains(headingInput))
+            {
+                return;
+            }
+
+            ToolStripMenuItem toolsMenu = FindToolsMenu(ownerForm);
+            if (toolsMenu == null)
+            {
+                return;
+            }
+
+            ToolStripMenuItem headingLabel = GetHeadingLabel(rotationRoot);
+            Font labelFont = headingLabel != null ? headingLabel.Font : rotationRoot.Font;
+            Color labelForeColor = headingLabel != null ? headingLabel.ForeColor : rotationRoot.DropDown.ForeColor;
+            ToolStripTextBox referenceInput = FindReferenceTextBox(toolsMenu.DropDownItems, headingInput.InputTextBox);
+            TextBox referenceControlInput = FindReferenceTextBoxControl(ownerForm, headingInput);
+            headingInput.InputTextBox.Font = labelFont;
+
+            if (referenceInput != null)
+            {
+                Color inputBackColor = referenceInput.TextBox == null ? referenceInput.BackColor : referenceInput.TextBox.BackColor;
+                Color inputForeColor = referenceInput.TextBox == null ? referenceInput.ForeColor : referenceInput.TextBox.ForeColor;
+                headingInput.ApplyStyle(inputBackColor, inputForeColor, ControlPaint.Dark(inputBackColor, 0.15f), labelFont);
+            }
+            else if (referenceControlInput != null)
+            {
+                headingInput.ApplyStyle(referenceControlInput.BackColor, referenceControlInput.ForeColor, ControlPaint.Dark(referenceControlInput.BackColor, 0.15f), labelFont);
+            }
+            else
+            {
+                headingInput.ApplyStyle(rotationRoot.DropDown.BackColor, labelForeColor, Color.FromArgb(70, 70, 70), labelFont);
+            }
+
+            styledRotationInputs.Add(headingInput);
+        }
+
+        private bool TryGetCurrentMagneticHeading(object groundControl, out int heading)
+        {
+            heading = 0;
+            if (groundControl == null)
+            {
+                return false;
+            }
+
+            float renderRotationDegrees;
+            if (!TryGetCurrentRenderRotation(groundControl, out renderRotationDegrees))
+            {
+                return false;
+            }
+
+            LogicalPositions.Position displayPosition;
+            TryGetDisplayPosition(groundControl, out displayPosition);
+            float magneticHeading = renderRotationDegrees;
+            if (displayPosition != null)
+            {
+                magneticHeading += displayPosition.MagneticVariation;
+            }
+
+            heading = NormalizeHeading((int)Math.Round(magneticHeading, MidpointRounding.AwayFromZero));
+            return true;
+        }
+
+        private static int NormalizeHeading(int heading)
+        {
+            int normalized = heading % 360;
+            if (normalized < 0)
+            {
+                normalized += 360;
+            }
+            return normalized;
+        }
+
+        private TextBox FindReferenceTextBoxControl(Form ownerForm, HeadingInputHost rotationHeadingInput)
+        {
+            if (ownerForm == null)
+            {
+                return null;
+            }
+
+            TextBox fallback = null;
+            TextBox styledFallback = null;
+            TextBox findCandidate = null;
+
+            foreach (Form form in Application.OpenForms)
+            {
+                if (form == null || form.IsDisposed)
+                {
+                    continue;
                 }
 
-                int parsedAngle;
-                if (!int.TryParse(input.Text.Trim(), out parsedAngle) || parsedAngle < 0 || parsedAngle > 359)
+                foreach (Control control in GetAllControlsIncludingRoot(form))
                 {
-                    MessageBox.Show("Please enter a whole number between 000 and 359.", "Ground Rotation Input");
-                    return false;
-                }
+                    TextBox textBox = control as TextBox;
+                    if (textBox == null)
+                    {
+                        continue;
+                    }
 
-                selectedAngle = parsedAngle;
+                    if (rotationHeadingInput != null && rotationHeadingInput.InputTextBox != null && ReferenceEquals(textBox, rotationHeadingInput.InputTextBox))
+                    {
+                        continue;
+                    }
+
+                    if (findCandidate == null && HasFindHint(textBox))
+                    {
+                        findCandidate = textBox;
+                    }
+
+                    if (styledFallback == null && (textBox.BackColor != SystemColors.Window || textBox.ForeColor != SystemColors.WindowText || textBox.BorderStyle != BorderStyle.Fixed3D))
+                    {
+                        styledFallback = textBox;
+                    }
+
+                    if (fallback == null)
+                    {
+                        fallback = textBox;
+                    }
+                }
+            }
+
+            if (findCandidate != null)
+            {
+                return findCandidate;
+            }
+
+            if (styledFallback != null)
+            {
+                return styledFallback;
+            }
+
+            return fallback;
+        }
+
+        private static bool HasFindHint(TextBox textBox)
+        {
+            if (textBox == null)
+            {
+                return false;
+            }
+
+            if (ContainsFind(textBox.Name) || ContainsFind(textBox.AccessibleName) || ContainsFind(textBox.Text))
+            {
                 return true;
             }
+
+            Control parent = textBox.Parent;
+            while (parent != null)
+            {
+                if (ContainsFind(parent.Name) || ContainsFind(parent.Text) || ContainsFind(parent.GetType().Name))
+                {
+                    return true;
+                }
+                parent = parent.Parent;
+            }
+
+            return false;
+        }
+
+        private static bool ContainsFind(string value)
+        {
+            return !string.IsNullOrEmpty(value) && value.IndexOf("find", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static IEnumerable<Control> GetAllControlsIncludingRoot(Control root)
+        {
+            if (root == null)
+            {
+                yield break;
+            }
+
+            yield return root;
+            foreach (Control child in GetAllControls(root))
+            {
+                yield return child;
+            }
+        }
+
+        private ToolStripTextBox FindReferenceTextBox(ToolStripItemCollection items, TextBox rotationHeadingInput)
+        {
+            if (items == null)
+            {
+                return null;
+            }
+
+            foreach (ToolStripItem item in items)
+            {
+                ToolStripTextBox textBox = item as ToolStripTextBox;
+                if (textBox != null && (rotationHeadingInput == null || textBox.TextBox == null || !ReferenceEquals(textBox.TextBox, rotationHeadingInput)))
+                {
+                    return textBox;
+                }
+
+                ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+                if (menuItem == null)
+                {
+                    continue;
+                }
+
+                ToolStripTextBox nestedTextBox = FindReferenceTextBox(menuItem.DropDownItems, rotationHeadingInput);
+                if (nestedTextBox != null)
+                {
+                    return nestedTextBox;
+                }
+            }
+
+            return null;
+        }
+
+        private bool TryParseAngle(string rawAngle, out int selectedAngle)
+        {
+            return int.TryParse((rawAngle ?? string.Empty).Trim(), out selectedAngle) && selectedAngle >= 0 && selectedAngle <= 359;
         }
 
         private Form GetOwnerForm(ToolStripItem item)
@@ -784,6 +1121,161 @@ namespace GroundDisplayRotationPlugin
             foreach (ToolStripMenuItem resetItem in resetItems)
             {
                 resetItem.Checked = false;
+            }
+        }
+
+        private sealed class HeadingInputHost : ToolStripControlHost
+        {
+            public HeadingInputHost()
+                : base(new BorderedInputControl())
+            {
+                AutoSize = false;
+                Size = new Size(120, 26);
+                Margin = new Padding(0, 1, 6, 3);
+            }
+
+            public TextBox InputTextBox
+            {
+                get { return InputControl.InnerTextBox; }
+            }
+
+            public Color InputBackColor
+            {
+                get { return InputControl.InputBackColor; }
+            }
+
+            public bool IsFocused
+            {
+                get { return InputControl.IsInputFocused; }
+            }
+
+            private BorderedInputControl InputControl
+            {
+                get { return (BorderedInputControl)Control; }
+            }
+
+            public void ApplyStyle(Color inputBackColor, Color inputForeColor, Color borderColor, Font font)
+            {
+                InputControl.ApplyStyle(inputBackColor, inputForeColor, borderColor, font);
+            }
+        }
+
+        private sealed class BorderedInputControl : Control
+        {
+            private readonly TextBox innerTextBox = new TextBox();
+            private Color borderColor = Color.Black;
+            private readonly Color focusBorderColor = Color.FromArgb(0, 232, 255);
+            private bool hasFocus;
+
+            public BorderedInputControl()
+            {
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                BackColor = SystemColors.Control;
+                Size = new Size(120, 26);
+
+                innerTextBox.BorderStyle = BorderStyle.None;
+                innerTextBox.Location = new Point(5, 4);
+                innerTextBox.Width = Width - 8;
+                innerTextBox.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
+                innerTextBox.Enter += InnerTextBox_FocusChanged;
+                innerTextBox.Leave += InnerTextBox_FocusChanged;
+                innerTextBox.GotFocus += InnerTextBox_FocusChanged;
+                innerTextBox.LostFocus += InnerTextBox_FocusChanged;
+                innerTextBox.MouseDown += InnerTextBox_FocusChanged;
+                innerTextBox.KeyDown += InnerTextBox_FocusChanged;
+                innerTextBox.Enter += InnerTextBox_SelectAll;
+                innerTextBox.GotFocus += InnerTextBox_SelectAll;
+                Controls.Add(innerTextBox);
+            }
+
+            public bool IsInputFocused
+            {
+                get { return hasFocus; }
+            }
+
+            private void InnerTextBox_FocusChanged(object sender, EventArgs e)
+            {
+                UpdateFocusState();
+            }
+
+            private void InnerTextBox_SelectAll(object sender, EventArgs e)
+            {
+                if (innerTextBox.IsDisposed)
+                {
+                    return;
+                }
+
+                innerTextBox.BeginInvoke((MethodInvoker)delegate
+                {
+                    if (!innerTextBox.IsDisposed)
+                    {
+                        innerTextBox.SelectAll();
+                    }
+                });
+            }
+
+            protected override void OnGotFocus(EventArgs e)
+            {
+                base.OnGotFocus(e);
+                UpdateFocusState();
+            }
+
+            protected override void OnLostFocus(EventArgs e)
+            {
+                base.OnLostFocus(e);
+                UpdateFocusState();
+            }
+
+            public TextBox InnerTextBox
+            {
+                get { return innerTextBox; }
+            }
+
+            public Color InputBackColor
+            {
+                get { return innerTextBox.BackColor; }
+            }
+
+            public void ApplyStyle(Color inputBackColor, Color inputForeColor, Color outerBorderColor, Font font)
+            {
+                borderColor = outerBorderColor;
+                BackColor = inputBackColor;
+                innerTextBox.BackColor = inputBackColor;
+                innerTextBox.ForeColor = inputForeColor;
+                innerTextBox.Font = font;
+                UpdateFocusState();
+                Invalidate();
+            }
+
+            private void UpdateFocusState()
+            {
+                bool focusedNow = innerTextBox.Focused || innerTextBox.ContainsFocus || Focused || ContainsFocus;
+                if (focusedNow != hasFocus)
+                {
+                    hasFocus = focusedNow;
+                    Invalidate();
+                }
+            }
+
+            protected override void OnResize(EventArgs e)
+            {
+                base.OnResize(e);
+                innerTextBox.Location = new Point(5, Math.Max(2, (Height - innerTextBox.PreferredHeight) / 2));
+                innerTextBox.Width = Math.Max(10, Width - 8);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                using (SolidBrush brush = new SolidBrush(BackColor))
+                {
+                    e.Graphics.FillRectangle(brush, ClientRectangle);
+                }
+
+                Color paintBorder = hasFocus ? focusBorderColor : borderColor;
+                using (Pen pen = new Pen(paintBorder))
+                {
+                    e.Graphics.DrawRectangle(pen, 0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
+                }
             }
         }
 

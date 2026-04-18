@@ -6,7 +6,7 @@ This plugin adds a `Rotate View` submenu under `Tools` in Ground (ASMGCS) window
 
 From that submenu controllers can:
 
-- Select `Set Rotation Heading` and enter a heading from `000` to `359`.
+- Enter a heading from `000` to `359` in the inline textbox directly under `Rotate View`, then press `Enter` (or click away from the textbox) to apply it.
 - Select `Reset to Original` to return to the initially loaded heading for the active position.
 
 Rotation changes are applied to the specific ground window/control that invoked the command.
