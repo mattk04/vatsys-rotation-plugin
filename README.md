@@ -7,7 +7,17 @@ This plugin adds a `Rotate View` submenu under `Tools` in Ground (ASMGCS) window
 From that submenu controllers can:
 
 - Enter a magnetic heading from `000` to `359` to orient the ground window.
+- Use `Saved Headings` to browse saved headings for the current aerodrome.
+- Hover a saved heading to access `Load`, `Delete`, or `Set as Auto-Load`.
+- Use `Save Current Heading` to save the current heading for the current aerodrome, with an optional label.
+- Set or clear a single per-aerodrome auto-apply heading.
 - Select `Reset to Original` to return to the initially loaded heading for the window.
+
+When a saved heading has a label, it is shown beside the heading in the list.
+
+Saved headings and auto-apply values are stored in:
+
+- `%USERPROFILE%\Documents\vatSys Rotation Plugin\rotations.json`
 
 ### Why use it?
 The default rotations of the ground map at each location are generally sufficient for most needs. At some locations, however, it may be beneficial to rotate the display to better fit the available space (for controllers with limited screen real estate) or to better align the aerodrome with any surrounding windows (for controllers who are top down to aerodromoes like YBRM, where the default rotation is 180 degrees offset from the corresponding air display).

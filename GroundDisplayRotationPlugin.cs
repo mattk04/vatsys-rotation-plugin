@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.IO;
 using System.Drawing;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Windows.Forms;
 using vatsys;
 using vatsys.Plugin;
@@ -17,11 +20,16 @@ namespace GroundDisplayRotationPlugin
     [Export(typeof(IPlugin))]
     public class GroundDisplayRotationPlugin : IPlugin
     {
+        private const string SavedHeadingsMenuKey = "SavedHeadingsMenu";
+        private const string ClearAutoApplyMenuKey = "ClearAutoApplyMenu";
+
         private readonly List<ToolStripMenuItem> resetItems = new List<ToolStripMenuItem>();
         private readonly Dictionary<object, float> originalRotation = new Dictionary<object, float>(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<object, Dictionary<object, float>> originalRotationByPosition = new Dictionary<object, Dictionary<object, float>>(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<object, int> lastAngleByGroundControl = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<Form, ToolStripMenuItem> rotationMenusByForm = new Dictionary<Form, ToolStripMenuItem>();
+        private readonly Dictionary<object, string> lastAerodromeByGroundControl = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        private readonly RotationSettingsStore rotationStore = new RotationSettingsStore();
         private readonly HashSet<HeadingInputHost> styledRotationInputs = new HashSet<HeadingInputHost>();
         private readonly Timer menuInjectionTimer = new Timer();
 
@@ -69,6 +77,8 @@ namespace GroundDisplayRotationPlugin
                     {
                         continue;
                     }
+
+                    HandleAutoApplyForGroundControl(groundControl);
 
                     ToolStripMenuItem toolsMenu = FindToolsMenu(form);
                     if (toolsMenu == null)
@@ -120,6 +130,7 @@ namespace GroundDisplayRotationPlugin
                 originalRotation.Remove(groundControl);
                 originalRotationByPosition.Remove(groundControl);
                 lastAngleByGroundControl.Remove(groundControl);
+                lastAerodromeByGroundControl.Remove(groundControl);
             }
 
             rotationMenusByForm.Remove(form);
@@ -214,15 +225,43 @@ namespace GroundDisplayRotationPlugin
             headingInput.InputTextBox.Leave += HeadingInput_Leave;
             headingInput.InputTextBox.Tag = headingInput;
 
-            var resetRootItem = new ToolStripMenuItem("Reset to Original")
+            var applyLabel = new ApplyLabelHost(headingInput);
+            applyLabel.ApplyLabel.Click += ApplyLabel_Click;
+
+            var resetRootItem = new ToolStripMenuItem("Reset to Original Heading")
             {
                 Tag = -1,
                 CheckOnClick = false
             };
             resetRootItem.Click += RotationMenuItem_Click;
 
+            var savedHeadingsItem = new ToolStripMenuItem("Saved Headings")
+            {
+                Name = SavedHeadingsMenuKey
+            };
+            ToolStripDropDownMenu savedHeadingsMenu = savedHeadingsItem.DropDown as ToolStripDropDownMenu;
+            if (savedHeadingsMenu != null)
+            {
+                savedHeadingsMenu.ShowImageMargin = false;
+                savedHeadingsMenu.ShowCheckMargin = false;
+            }
+
+            var saveHeadingItem = new ToolStripMenuItem("Save Current Heading");
+            saveHeadingItem.Click += SaveHeadingItem_Click;
+
+            var clearAutoApplyItem = new ToolStripMenuItem("Disable Auto-Load")
+            {
+                Name = ClearAutoApplyMenuKey
+            };
+            clearAutoApplyItem.Click += ClearAutoApplyItem_Click;
+
             rotationRoot.DropDownItems.Add(headingLabel);
             rotationRoot.DropDownItems.Add(headingInput);
+            rotationRoot.DropDownItems.Add(applyLabel);
+            rotationRoot.DropDownItems.Add(new ToolStripSeparator());
+            rotationRoot.DropDownItems.Add(saveHeadingItem);
+            rotationRoot.DropDownItems.Add(savedHeadingsItem);
+            rotationRoot.DropDownItems.Add(clearAutoApplyItem);
             rotationRoot.DropDownItems.Add(new ToolStripSeparator());
             rotationRoot.DropDownItems.Add(resetRootItem);
 
@@ -284,6 +323,8 @@ namespace GroundDisplayRotationPlugin
             }
 
             headingInput.InputTextBox.Text = prefilledAngle.ToString("D3");
+            PopulateSavedHeadingsMenu(rotationRoot, groundControl);
+            UpdateAutoApplyMenuState(rotationRoot, groundControl);
             EnsureHeadingInputStyled(ownerForm, rotationRoot, headingInput, false);
         }
 
@@ -390,6 +431,42 @@ namespace GroundDisplayRotationPlugin
             e.SuppressKeyPress = true;
         }
 
+        private void ApplyLabel_Click(object sender, EventArgs e)
+        {
+            Label label = sender as Label;
+            ApplyLabelHost applyLabelHost = label == null ? null : label.Tag as ApplyLabelHost;
+            if (applyLabelHost == null || applyLabelHost.HeadingInput == null)
+            {
+                return;
+            }
+
+            bool applied = ApplyRotationFromInlineInput(applyLabelHost.HeadingInput, true);
+            if (!applied)
+            {
+                return;
+            }
+
+            RemoveFocusFromHeadingInput(applyLabelHost.HeadingInput);
+
+            ToolStripDropDown dropDown = applyLabelHost.Owner as ToolStripDropDown;
+            if (dropDown == null)
+            {
+                dropDown = applyLabelHost.GetCurrentParent() as ToolStripDropDown;
+            }
+            CloseDropDownHierarchy(dropDown);
+        }
+
+        private static void CloseDropDownHierarchy(ToolStripDropDown dropDown)
+        {
+            ToolStripDropDown current = dropDown;
+            while (current != null)
+            {
+                ToolStripItem ownerItem = current.OwnerItem;
+                current.Close(ToolStripDropDownCloseReason.AppClicked);
+                current = ownerItem == null ? null : ownerItem.Owner as ToolStripDropDown;
+            }
+        }
+
         private void RemoveFocusFromHeadingInput(HeadingInputHost headingInput)
         {
             if (headingInput == null)
@@ -438,13 +515,13 @@ namespace GroundDisplayRotationPlugin
             ApplyRotationFromInlineInput(headingInput, false);
         }
 
-        private void ApplyRotationFromInlineInput(HeadingInputHost headingInput, bool notifyOnInvalidInput)
+        private bool ApplyRotationFromInlineInput(HeadingInputHost headingInput, bool notifyOnInvalidInput)
         {
             try
             {
                 if (headingInput == null)
                 {
-                    return;
+                    return false;
                 }
 
                 int selectedAngle;
@@ -454,10 +531,46 @@ namespace GroundDisplayRotationPlugin
                     {
                         MessageBox.Show("Please enter a whole number between 000 and 359.", "Ground Rotation Input");
                     }
-                    return;
+                    return false;
                 }
 
                 Form ownerForm = GetOwnerForm(headingInput);
+                if (ownerForm == null)
+                {
+                    return false;
+                }
+
+                object groundControl = GetGroundControl(ownerForm);
+                if (groundControl == null)
+                {
+                    return false;
+                }
+
+                lastAngleByGroundControl[groundControl] = selectedAngle;
+                ApplyRotation(groundControl, selectedAngle);
+                UpdateCheckedState(selectedAngle);
+
+                headingInput.InputTextBox.Text = selectedAngle.ToString("D3");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ground rotation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+                return false;
+            }
+        }
+
+        private void SaveHeadingItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
+                if (clickedItem == null)
+                {
+                    return;
+                }
+
+                Form ownerForm = GetOwnerForm(clickedItem);
                 if (ownerForm == null)
                 {
                     return;
@@ -469,16 +582,548 @@ namespace GroundDisplayRotationPlugin
                     return;
                 }
 
-                lastAngleByGroundControl[groundControl] = selectedAngle;
-                ApplyRotation(groundControl, selectedAngle);
-                UpdateCheckedState(selectedAngle);
+                string aerodromeKey;
+                if (!TryGetAerodromeKey(groundControl, out aerodromeKey))
+                {
+                    MessageBox.Show("Unable to determine the current aerodrome.", "Ground Rotation");
+                    return;
+                }
 
-                headingInput.InputTextBox.Text = selectedAngle.ToString("D3");
+                int heading;
+                if (!TryGetCurrentOrLastHeading(groundControl, out heading))
+                {
+                    MessageBox.Show("No heading is currently available to save.", "Ground Rotation");
+                    return;
+                }
+
+                string existingLabel = rotationStore.GetSavedHeadingLabel(aerodromeKey, heading);
+                string headingLabel;
+                if (!TryPromptForOptionalHeadingLabel(ownerForm, heading, existingLabel, out headingLabel))
+                {
+                    return;
+                }
+
+                rotationStore.AddOrUpdateSavedHeading(aerodromeKey, heading, headingLabel);
+
+                string message = "Saved heading " + heading.ToString("D3") + " for " + aerodromeKey + ".";
+                if (!string.IsNullOrEmpty(headingLabel))
+                {
+                    message += " Label: " + headingLabel + ".";
+                }
+                MessageBox.Show(message, "Ground Rotation");
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Ground rotation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+                MessageBox.Show("Save heading failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
             }
+        }
+
+        private void SetSavedHeadingAsAutoLoad_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
+                if (clickedItem == null)
+                {
+                    return;
+                }
+
+                Form ownerForm = GetOwnerForm(clickedItem);
+                if (ownerForm == null)
+                {
+                    return;
+                }
+
+                object groundControl = GetGroundControl(ownerForm);
+                if (groundControl == null)
+                {
+                    return;
+                }
+
+                string aerodromeKey;
+                if (!TryGetAerodromeKey(groundControl, out aerodromeKey))
+                {
+                    MessageBox.Show("Unable to determine the current aerodrome.", "Ground Rotation");
+                    return;
+                }
+
+                object tag = clickedItem.Tag;
+                if (!(tag is int))
+                {
+                    return;
+                }
+                int heading = (int)tag;
+
+                rotationStore.SetAutoApplyHeading(aerodromeKey, heading);
+                MessageBox.Show("Auto-apply set to " + heading.ToString("D3") + " for " + aerodromeKey + ".", "Ground Rotation");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Set auto-load failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+            }
+        }
+
+        private void ClearAutoApplyItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
+                if (clickedItem == null)
+                {
+                    return;
+                }
+
+                Form ownerForm = GetOwnerForm(clickedItem);
+                if (ownerForm == null)
+                {
+                    return;
+                }
+
+                object groundControl = GetGroundControl(ownerForm);
+                if (groundControl == null)
+                {
+                    return;
+                }
+
+                string aerodromeKey;
+                if (!TryGetAerodromeKey(groundControl, out aerodromeKey))
+                {
+                    MessageBox.Show("Unable to determine the current aerodrome.", "Ground Rotation");
+                    return;
+                }
+
+                rotationStore.ClearAutoApplyHeading(aerodromeKey);
+                MessageBox.Show("Cleared auto-apply heading for " + aerodromeKey + ".", "Ground Rotation");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Clear auto-apply failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+            }
+        }
+
+        private void LoadSavedHeading_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
+                if (clickedItem == null)
+                {
+                    return;
+                }
+
+                object tag = clickedItem.Tag;
+                if (!(tag is int))
+                {
+                    return;
+                }
+
+                int heading = (int)tag;
+                Form ownerForm = GetOwnerForm(clickedItem);
+                if (ownerForm == null)
+                {
+                    return;
+                }
+
+                object groundControl = GetGroundControl(ownerForm);
+                if (groundControl == null)
+                {
+                    return;
+                }
+
+                lastAngleByGroundControl[groundControl] = heading;
+                ApplyRotation(groundControl, heading);
+                UpdateCheckedState(heading);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Load heading failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+            }
+        }
+
+        private void DeleteSavedHeading_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
+                if (clickedItem == null)
+                {
+                    return;
+                }
+
+                object tag = clickedItem.Tag;
+                if (!(tag is int))
+                {
+                    return;
+                }
+
+                int heading = (int)tag;
+                Form ownerForm = GetOwnerForm(clickedItem);
+                if (ownerForm == null)
+                {
+                    return;
+                }
+
+                object groundControl = GetGroundControl(ownerForm);
+                if (groundControl == null)
+                {
+                    return;
+                }
+
+                string aerodromeKey;
+                if (!TryGetAerodromeKey(groundControl, out aerodromeKey))
+                {
+                    MessageBox.Show("Unable to determine the current aerodrome.", "Ground Rotation");
+                    return;
+                }
+
+                if (rotationStore.RemoveSavedHeading(aerodromeKey, heading))
+                {
+                    MessageBox.Show("Deleted heading " + heading.ToString("D3") + " for " + aerodromeKey + ".", "Ground Rotation");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Delete heading failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+            }
+        }
+
+        private bool TryPromptForOptionalHeadingLabel(IWin32Window owner, int heading, string existingLabel, out string headingLabel)
+        {
+            headingLabel = null;
+
+            using (Form dialog = new Form())
+            {
+                dialog.Text = "Save Heading";
+                dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dialog.StartPosition = FormStartPosition.CenterParent;
+                dialog.MinimizeBox = false;
+                dialog.MaximizeBox = false;
+                dialog.ShowInTaskbar = false;
+                dialog.ClientSize = new Size(360, 140);
+
+                Label promptLabel = new Label();
+                promptLabel.AutoSize = false;
+                promptLabel.Text = "Optional label for heading " + heading.ToString("D3") + ":";
+                promptLabel.SetBounds(12, 12, 336, 20);
+
+                TextBox labelInput = new TextBox();
+                labelInput.SetBounds(12, 36, 336, 22);
+                labelInput.Text = existingLabel ?? string.Empty;
+
+                Label hintLabel = new Label();
+                hintLabel.AutoSize = false;
+                hintLabel.Text = "Leave empty to save without a label.";
+                hintLabel.SetBounds(12, 62, 336, 18);
+
+                Button okButton = new Button();
+                okButton.Text = "Save";
+                okButton.DialogResult = DialogResult.OK;
+                okButton.SetBounds(192, 100, 75, 25);
+
+                Button cancelButton = new Button();
+                cancelButton.Text = "Cancel";
+                cancelButton.DialogResult = DialogResult.Cancel;
+                cancelButton.SetBounds(273, 100, 75, 25);
+
+                dialog.Controls.AddRange(new Control[] { promptLabel, labelInput, hintLabel, okButton, cancelButton });
+                dialog.AcceptButton = okButton;
+                dialog.CancelButton = cancelButton;
+
+                DialogResult result = owner == null ? dialog.ShowDialog() : dialog.ShowDialog(owner);
+                if (result != DialogResult.OK)
+                {
+                    return false;
+                }
+
+                string trimmed = (labelInput.Text ?? string.Empty).Trim();
+                headingLabel = trimmed.Length == 0 ? null : trimmed;
+                return true;
+            }
+        }
+
+        private void PopulateSavedHeadingsMenu(ToolStripMenuItem rotationRoot, object groundControl)
+        {
+            ToolStripMenuItem savedHeadingsMenu = FindMenuItemByName(rotationRoot, SavedHeadingsMenuKey);
+            if (savedHeadingsMenu == null || groundControl == null)
+            {
+                return;
+            }
+
+            savedHeadingsMenu.DropDownItems.Clear();
+
+            string aerodromeKey;
+            if (!TryGetAerodromeKey(groundControl, out aerodromeKey))
+            {
+                savedHeadingsMenu.Enabled = false;
+                savedHeadingsMenu.ToolTipText = "No aerodrome selected.";
+                return;
+            }
+
+            List<SavedHeadingInfo> headings = rotationStore.GetSavedHeadings(aerodromeKey);
+            if (headings.Count == 0)
+            {
+                savedHeadingsMenu.Enabled = false;
+                savedHeadingsMenu.DropDownItems.Add(new ToolStripMenuItem("No saved headings") { Enabled = false });
+                return;
+            }
+
+            savedHeadingsMenu.Enabled = true;
+            foreach (SavedHeadingInfo heading in headings)
+            {
+                string headingText = heading.Heading.ToString("D3");
+                if (!string.IsNullOrEmpty(heading.Label))
+                {
+                    headingText += " [" + heading.Label + "]";
+                }
+
+                ToolStripMenuItem headingItem = new ToolStripMenuItem(headingText)
+                {
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    ShowShortcutKeys = false,
+                    ShortcutKeyDisplayString = string.Empty
+                };
+
+                ToolStripDropDownMenu headingSubMenu = headingItem.DropDown as ToolStripDropDownMenu;
+                if (headingSubMenu != null)
+                {
+                    headingSubMenu.ShowImageMargin = false;
+                    headingSubMenu.ShowCheckMargin = false;
+                }
+
+                ToolStripMenuItem loadAction = new ToolStripMenuItem("Load")
+                {
+                    Tag = heading.Heading,
+                    ShowShortcutKeys = false,
+                    ShortcutKeyDisplayString = string.Empty
+                };
+                loadAction.Click += LoadSavedHeading_Click;
+
+                ToolStripMenuItem deleteAction = new ToolStripMenuItem("Delete")
+                {
+                    Tag = heading.Heading,
+                    ShowShortcutKeys = false,
+                    ShortcutKeyDisplayString = string.Empty
+                };
+                deleteAction.Click += DeleteSavedHeading_Click;
+
+                ToolStripMenuItem autoLoadAction = new ToolStripMenuItem("Set as Auto-Load")
+                {
+                    Tag = heading.Heading,
+                    ShowShortcutKeys = false,
+                    ShortcutKeyDisplayString = string.Empty
+                };
+                autoLoadAction.Click += SetSavedHeadingAsAutoLoad_Click;
+
+                headingItem.DropDownItems.Add(loadAction);
+                headingItem.DropDownItems.Add(deleteAction);
+                headingItem.DropDownItems.Add(autoLoadAction);
+
+                savedHeadingsMenu.DropDownItems.Add(headingItem);
+            }
+        }
+
+        private void UpdateAutoApplyMenuState(ToolStripMenuItem rotationRoot, object groundControl)
+        {
+            ToolStripMenuItem clearMenu = FindMenuItemByName(rotationRoot, ClearAutoApplyMenuKey);
+            if (clearMenu == null)
+            {
+                return;
+            }
+
+            string aerodromeKey;
+            if (!TryGetAerodromeKey(groundControl, out aerodromeKey))
+            {
+                clearMenu.Enabled = false;
+                return;
+            }
+
+            int? autoHeading = rotationStore.GetAutoApplyHeading(aerodromeKey);
+            clearMenu.Enabled = autoHeading.HasValue;
+            clearMenu.Text = autoHeading.HasValue
+                ? "Disable Auto-Load (now " + autoHeading.Value.ToString("D3") + ")"
+                : "Disable Auto-Load";
+        }
+
+        private ToolStripMenuItem FindMenuItemByName(ToolStripMenuItem root, string name)
+        {
+            if (root == null)
+            {
+                return null;
+            }
+
+            foreach (ToolStripItem item in root.DropDownItems)
+            {
+                ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+                if (menuItem != null && string.Equals(menuItem.Name, name, StringComparison.Ordinal))
+                {
+                    return menuItem;
+                }
+            }
+
+            return null;
+        }
+
+        private bool TryGetCurrentOrLastHeading(object groundControl, out int heading)
+        {
+            heading = 0;
+            if (TryGetCurrentMagneticHeading(groundControl, out heading))
+            {
+                return true;
+            }
+
+            int lastHeading;
+            if (lastAngleByGroundControl.TryGetValue(groundControl, out lastHeading))
+            {
+                heading = lastHeading;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryGetAerodromeKey(object groundControl, out string aerodromeKey)
+        {
+            aerodromeKey = null;
+            LogicalPositions.Position displayPosition;
+            if (!TryGetDisplayPosition(groundControl, out displayPosition) || displayPosition == null)
+            {
+                return false;
+            }
+
+            aerodromeKey = TryGetAerodromeKeyFromPosition(displayPosition);
+            if (string.IsNullOrEmpty(aerodromeKey))
+            {
+                return false;
+            }
+
+            aerodromeKey = aerodromeKey.Trim().ToUpperInvariant();
+            return aerodromeKey.Length > 0;
+        }
+
+        private static string TryGetAerodromeKeyFromPosition(LogicalPositions.Position displayPosition)
+        {
+            if (displayPosition == null)
+            {
+                return null;
+            }
+
+            string[] candidateProperties =
+            {
+                "Aerodrome",
+                "AerodromeICAO",
+                "AerodromeName",
+                "Icao",
+                "ICAO",
+                "Airport"
+            };
+
+            Type positionType = displayPosition.GetType();
+            foreach (string propertyName in candidateProperties)
+            {
+                PropertyInfo property = positionType.GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (property == null)
+                {
+                    continue;
+                }
+
+                object value;
+                try
+                {
+                    value = property.GetValue(displayPosition, null);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                string text = ExtractAerodromeText(value);
+                if (!string.IsNullOrEmpty(text))
+                {
+                    return text;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(displayPosition.Name) && displayPosition.Name.Length >= 4)
+            {
+                return displayPosition.Name.Substring(0, 4);
+            }
+
+            return null;
+        }
+
+        private static string ExtractAerodromeText(object value)
+        {
+            if (value == null)
+            {
+                return null;
+            }
+
+            string asText = value as string;
+            if (!string.IsNullOrEmpty(asText))
+            {
+                return asText;
+            }
+
+            Type valueType = value.GetType();
+            string[] nestedNames = { "ICAO", "Icao", "Name" };
+            foreach (string nestedName in nestedNames)
+            {
+                PropertyInfo property = valueType.GetProperty(nestedName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (property == null)
+                {
+                    continue;
+                }
+
+                object nestedValue;
+                try
+                {
+                    nestedValue = property.GetValue(value, null);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                string nestedText = nestedValue as string;
+                if (!string.IsNullOrEmpty(nestedText))
+                {
+                    return nestedText;
+                }
+            }
+
+            return value.ToString();
+        }
+
+        private void HandleAutoApplyForGroundControl(object groundControl)
+        {
+            if (groundControl == null)
+            {
+                return;
+            }
+
+            string aerodromeKey;
+            if (!TryGetAerodromeKey(groundControl, out aerodromeKey))
+            {
+                return;
+            }
+
+            string lastAerodrome;
+            if (lastAerodromeByGroundControl.TryGetValue(groundControl, out lastAerodrome) && string.Equals(lastAerodrome, aerodromeKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            lastAerodromeByGroundControl[groundControl] = aerodromeKey;
+
+            int? autoHeading = rotationStore.GetAutoApplyHeading(aerodromeKey);
+            if (!autoHeading.HasValue)
+            {
+                return;
+            }
+
+            int heading = NormalizeHeading(autoHeading.Value);
+            lastAngleByGroundControl[groundControl] = heading;
+            ApplyRotation(groundControl, heading);
         }
 
         private HeadingInputHost GetHeadingInput(ToolStripMenuItem rotationRoot)
@@ -540,6 +1185,7 @@ namespace GroundDisplayRotationPlugin
             ToolStripMenuItem headingLabel = GetHeadingLabel(rotationRoot);
             Font labelFont = headingLabel != null ? headingLabel.Font : rotationRoot.Font;
             Color labelForeColor = headingLabel != null ? headingLabel.ForeColor : rotationRoot.DropDown.ForeColor;
+            Color applyLabelForeColor = GetEnabledMenuItemForeColor(rotationRoot, rotationRoot.DropDown.ForeColor);
             ToolStripTextBox referenceInput = FindReferenceTextBox(toolsMenu.DropDownItems, headingInput.InputTextBox);
             TextBox referenceControlInput = FindReferenceTextBoxControl(ownerForm, headingInput);
             headingInput.InputTextBox.Font = labelFont;
@@ -549,17 +1195,68 @@ namespace GroundDisplayRotationPlugin
                 Color inputBackColor = referenceInput.TextBox == null ? referenceInput.BackColor : referenceInput.TextBox.BackColor;
                 Color inputForeColor = referenceInput.TextBox == null ? referenceInput.ForeColor : referenceInput.TextBox.ForeColor;
                 headingInput.ApplyStyle(inputBackColor, inputForeColor, ControlPaint.Dark(inputBackColor, 0.15f), labelFont);
+                applyLabelForeColor = inputForeColor;
             }
             else if (referenceControlInput != null)
             {
                 headingInput.ApplyStyle(referenceControlInput.BackColor, referenceControlInput.ForeColor, ControlPaint.Dark(referenceControlInput.BackColor, 0.15f), labelFont);
+                applyLabelForeColor = referenceControlInput.ForeColor;
             }
             else
             {
                 headingInput.ApplyStyle(rotationRoot.DropDown.BackColor, labelForeColor, Color.FromArgb(70, 70, 70), labelFont);
             }
 
+            ApplyLabelHost applyLabelHost = GetApplyLabelHost(rotationRoot);
+            if (applyLabelHost != null)
+            {
+                applyLabelHost.ApplyStyle(applyLabelForeColor, labelFont);
+            }
+
             styledRotationInputs.Add(headingInput);
+        }
+
+        private ApplyLabelHost GetApplyLabelHost(ToolStripMenuItem rotationRoot)
+        {
+            if (rotationRoot == null)
+            {
+                return null;
+            }
+
+            foreach (ToolStripItem item in rotationRoot.DropDownItems)
+            {
+                ApplyLabelHost applyLabelHost = item as ApplyLabelHost;
+                if (applyLabelHost != null)
+                {
+                    return applyLabelHost;
+                }
+            }
+
+            return null;
+        }
+
+        private static Color GetEnabledMenuItemForeColor(ToolStripMenuItem rotationRoot, Color fallback)
+        {
+            if (rotationRoot == null)
+            {
+                return fallback;
+            }
+
+            foreach (ToolStripItem item in rotationRoot.DropDownItems)
+            {
+                ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+                if (menuItem == null)
+                {
+                    continue;
+                }
+
+                if (menuItem.Enabled)
+                {
+                    return menuItem.ForeColor;
+                }
+            }
+
+            return fallback;
         }
 
         private bool TryGetCurrentMagneticHeading(object groundControl, out int heading)
@@ -1171,6 +1868,49 @@ namespace GroundDisplayRotationPlugin
             }
         }
 
+        private sealed class ApplyLabelHost : ToolStripControlHost
+        {
+            public ApplyLabelHost(HeadingInputHost headingInput)
+                : base(new Label())
+            {
+                HeadingInput = headingInput;
+                AutoSize = false;
+                Size = new Size(120, 26);
+                Margin = new Padding(0, 1, 6, 3);
+
+                ApplyLabel.Text = "Apply";
+                ApplyLabel.TextAlign = ContentAlignment.MiddleLeft;
+                ApplyLabel.Cursor = Cursors.Hand;
+                ApplyLabel.ForeColor = SystemColors.ControlText;
+                ApplyLabel.Font = headingInput == null || headingInput.InputTextBox == null ? ApplyLabel.Font : headingInput.InputTextBox.Font;
+                ApplyLabel.Tag = this;
+                ApplyLabel.AutoSize = false;
+                ApplyLabel.BackColor = Color.Transparent;
+                ApplyLabel.Width = 112;
+                ApplyLabel.Height = 22;
+            }
+
+            public void ApplyStyle(Color foreColor, Font font)
+            {
+                ApplyLabel.ForeColor = foreColor;
+                if (font != null)
+                {
+                    ApplyLabel.Font = font;
+                }
+            }
+
+            public HeadingInputHost HeadingInput
+            {
+                get;
+                private set;
+            }
+
+            public Label ApplyLabel
+            {
+                get { return (Label)Control; }
+            }
+        }
+
         private sealed class BorderedInputControl : Control
         {
             private readonly TextBox innerTextBox = new TextBox();
@@ -1302,6 +2042,362 @@ namespace GroundDisplayRotationPlugin
             public int GetHashCode(object obj)
             {
                 return RuntimeHelpers.GetHashCode(obj);
+            }
+        }
+
+        private sealed class SavedHeadingInfo
+        {
+            public int Heading;
+            public string Label;
+        }
+
+        [DataContract]
+        private sealed class RotationSettingsRoot
+        {
+            [DataMember(Order = 1)]
+            public int SchemaVersion;
+
+            [DataMember(Order = 2)]
+            public Dictionary<string, RotationAerodromeSettings> Aerodromes;
+        }
+
+        [DataContract]
+        private sealed class RotationAerodromeSettings
+        {
+            [DataMember(Order = 1)]
+            public List<int> SavedHeadings;
+
+            [DataMember(Order = 2)]
+            public int? AutoApplyHeading;
+
+            [DataMember(Order = 3)]
+            public Dictionary<int, string> HeadingLabels;
+        }
+
+        private sealed class RotationSettingsStore
+        {
+            private readonly object sync = new object();
+            private readonly string settingsPath;
+            private RotationSettingsRoot settings;
+
+            public RotationSettingsStore()
+            {
+                string basePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "vatSys Rotation Plugin");
+                settingsPath = Path.Combine(basePath, "rotations.json");
+                settings = LoadSettings();
+            }
+
+            public List<SavedHeadingInfo> GetSavedHeadings(string aerodromeKey)
+            {
+                lock (sync)
+                {
+                    RotationAerodromeSettings entry;
+                    if (!TryGetAerodromeEntry(aerodromeKey, false, out entry) || entry.SavedHeadings == null)
+                    {
+                        return new List<SavedHeadingInfo>();
+                    }
+
+                    List<int> sorted = new List<int>(entry.SavedHeadings);
+                    sorted.Sort();
+
+                    List<SavedHeadingInfo> result = new List<SavedHeadingInfo>();
+                    foreach (int heading in sorted)
+                    {
+                        string label = null;
+                        if (entry.HeadingLabels != null)
+                        {
+                            entry.HeadingLabels.TryGetValue(heading, out label);
+                        }
+
+                        result.Add(new SavedHeadingInfo
+                        {
+                            Heading = heading,
+                            Label = string.IsNullOrEmpty(label) ? null : label
+                        });
+                    }
+
+                    return result;
+                }
+            }
+
+            public string GetSavedHeadingLabel(string aerodromeKey, int heading)
+            {
+                lock (sync)
+                {
+                    RotationAerodromeSettings entry;
+                    if (!TryGetAerodromeEntry(aerodromeKey, false, out entry) || entry.HeadingLabels == null)
+                    {
+                        return null;
+                    }
+
+                    string label;
+                    if (!entry.HeadingLabels.TryGetValue(NormalizeHeading(heading), out label))
+                    {
+                        return null;
+                    }
+
+                    return string.IsNullOrEmpty(label) ? null : label;
+                }
+            }
+
+            public void AddOrUpdateSavedHeading(string aerodromeKey, int heading, string headingLabel)
+            {
+                lock (sync)
+                {
+                    RotationAerodromeSettings entry;
+                    if (!TryGetAerodromeEntry(aerodromeKey, true, out entry))
+                    {
+                        return;
+                    }
+
+                    if (entry.SavedHeadings == null)
+                    {
+                        entry.SavedHeadings = new List<int>();
+                    }
+
+                    if (entry.HeadingLabels == null)
+                    {
+                        entry.HeadingLabels = new Dictionary<int, string>();
+                    }
+
+                    int normalized = NormalizeHeading(heading);
+                    bool changed = false;
+
+                    if (!entry.SavedHeadings.Contains(normalized))
+                    {
+                        entry.SavedHeadings.Add(normalized);
+                        entry.SavedHeadings.Sort();
+                        changed = true;
+                    }
+
+                    string trimmedLabel = string.IsNullOrEmpty(headingLabel) ? null : headingLabel.Trim();
+                    if (string.IsNullOrEmpty(trimmedLabel))
+                    {
+                        if (entry.HeadingLabels.ContainsKey(normalized))
+                        {
+                            entry.HeadingLabels.Remove(normalized);
+                            changed = true;
+                        }
+                    }
+                    else
+                    {
+                        string existing;
+                        if (!entry.HeadingLabels.TryGetValue(normalized, out existing) || !string.Equals(existing, trimmedLabel, StringComparison.Ordinal))
+                        {
+                            entry.HeadingLabels[normalized] = trimmedLabel;
+                            changed = true;
+                        }
+                    }
+
+                    if (changed)
+                    {
+                        SaveSettings();
+                    }
+                }
+            }
+
+            public bool RemoveSavedHeading(string aerodromeKey, int heading)
+            {
+                lock (sync)
+                {
+                    RotationAerodromeSettings entry;
+                    if (!TryGetAerodromeEntry(aerodromeKey, false, out entry) || entry.SavedHeadings == null)
+                    {
+                        return false;
+                    }
+
+                    int normalized = NormalizeHeading(heading);
+                    bool removed = entry.SavedHeadings.Remove(normalized);
+                    if (!removed)
+                    {
+                        return false;
+                    }
+
+                    if (entry.HeadingLabels != null)
+                    {
+                        entry.HeadingLabels.Remove(normalized);
+                    }
+
+                    SaveSettings();
+                    return true;
+                }
+            }
+
+            public int? GetAutoApplyHeading(string aerodromeKey)
+            {
+                lock (sync)
+                {
+                    RotationAerodromeSettings entry;
+                    if (!TryGetAerodromeEntry(aerodromeKey, false, out entry))
+                    {
+                        return null;
+                    }
+
+                    return entry.AutoApplyHeading;
+                }
+            }
+
+            public void SetAutoApplyHeading(string aerodromeKey, int heading)
+            {
+                lock (sync)
+                {
+                    RotationAerodromeSettings entry;
+                    if (!TryGetAerodromeEntry(aerodromeKey, true, out entry))
+                    {
+                        return;
+                    }
+
+                    entry.AutoApplyHeading = NormalizeHeading(heading);
+                    SaveSettings();
+                }
+            }
+
+            public void ClearAutoApplyHeading(string aerodromeKey)
+            {
+                lock (sync)
+                {
+                    RotationAerodromeSettings entry;
+                    if (!TryGetAerodromeEntry(aerodromeKey, false, out entry))
+                    {
+                        return;
+                    }
+
+                    if (entry.AutoApplyHeading.HasValue)
+                    {
+                        entry.AutoApplyHeading = null;
+                        SaveSettings();
+                    }
+                }
+            }
+
+            private bool TryGetAerodromeEntry(string aerodromeKey, bool createIfMissing, out RotationAerodromeSettings entry)
+            {
+                entry = null;
+                if (string.IsNullOrEmpty(aerodromeKey))
+                {
+                    return false;
+                }
+
+                string key = aerodromeKey.Trim().ToUpperInvariant();
+                if (key.Length == 0)
+                {
+                    return false;
+                }
+
+                EnsureSettingsInitialized();
+
+                if (settings.Aerodromes == null)
+                {
+                    settings.Aerodromes = new Dictionary<string, RotationAerodromeSettings>(StringComparer.OrdinalIgnoreCase);
+                }
+
+                if (!settings.Aerodromes.TryGetValue(key, out entry) && createIfMissing)
+                {
+                    entry = new RotationAerodromeSettings
+                    {
+                        SavedHeadings = new List<int>(),
+                        AutoApplyHeading = null,
+                        HeadingLabels = new Dictionary<int, string>()
+                    };
+                    settings.Aerodromes[key] = entry;
+                }
+
+                if (entry != null && entry.HeadingLabels == null)
+                {
+                    entry.HeadingLabels = new Dictionary<int, string>();
+                }
+
+                return entry != null;
+            }
+
+            private void EnsureSettingsInitialized()
+            {
+                if (settings == null)
+                {
+                    settings = new RotationSettingsRoot();
+                }
+
+                if (settings.SchemaVersion <= 0)
+                {
+                    settings.SchemaVersion = 1;
+                }
+
+                if (settings.Aerodromes == null)
+                {
+                    settings.Aerodromes = new Dictionary<string, RotationAerodromeSettings>(StringComparer.OrdinalIgnoreCase);
+                }
+            }
+
+            private RotationSettingsRoot LoadSettings()
+            {
+                try
+                {
+                    if (!File.Exists(settingsPath))
+                    {
+                        return CreateEmptySettings();
+                    }
+
+                    DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(RotationSettingsRoot));
+                    using (FileStream stream = File.OpenRead(settingsPath))
+                    {
+                        RotationSettingsRoot loaded = serializer.ReadObject(stream) as RotationSettingsRoot;
+                        if (loaded == null)
+                        {
+                            return CreateEmptySettings();
+                        }
+
+                        if (loaded.Aerodromes == null)
+                        {
+                            loaded.Aerodromes = new Dictionary<string, RotationAerodromeSettings>(StringComparer.OrdinalIgnoreCase);
+                        }
+
+                        if (loaded.SchemaVersion <= 0)
+                        {
+                            loaded.SchemaVersion = 1;
+                        }
+
+                        return loaded;
+                    }
+                }
+                catch
+                {
+                    return CreateEmptySettings();
+                }
+            }
+
+            private RotationSettingsRoot CreateEmptySettings()
+            {
+                return new RotationSettingsRoot
+                {
+                    SchemaVersion = 1,
+                    Aerodromes = new Dictionary<string, RotationAerodromeSettings>(StringComparer.OrdinalIgnoreCase)
+                };
+            }
+
+            private void SaveSettings()
+            {
+                EnsureSettingsInitialized();
+
+                string directory = Path.GetDirectoryName(settingsPath);
+                if (string.IsNullOrEmpty(directory))
+                {
+                    return;
+                }
+
+                Directory.CreateDirectory(directory);
+
+                string tempPath = settingsPath + ".tmp";
+                DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(RotationSettingsRoot));
+                using (FileStream stream = File.Create(tempPath))
+                {
+                    serializer.WriteObject(stream, settings);
+                }
+
+                if (File.Exists(settingsPath))
+                {
+                    File.Delete(settingsPath);
+                }
+                File.Move(tempPath, settingsPath);
             }
         }
 
