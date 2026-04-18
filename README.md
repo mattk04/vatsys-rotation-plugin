@@ -9,7 +9,10 @@ From that submenu controllers can:
 - Enter a heading from `000` to `359` in the inline textbox directly under `Rotate View`, then press `Enter` (or click away from the textbox) to apply it.
 - Select `Reset to Original` to return to the initially loaded heading for the active position.
 
-Rotation changes are applied to the specific ground window/control that invoked the command.
+<img width="1214" height="778" alt="image" src="https://github.com/user-attachments/assets/69459ac7-39bf-4086-8d10-d6cba8f860f4" />
+<img width="1212" height="778" alt="image" src="https://github.com/user-attachments/assets/0f3d6f93-28e8-459e-a2e4-ddc497a9315d" />
+<img width="1209" height="778" alt="image" src="https://github.com/user-attachments/assets/75342b84-f817-4af6-ad5f-67d8d5457f73" />
+
 
 ## Build
 
