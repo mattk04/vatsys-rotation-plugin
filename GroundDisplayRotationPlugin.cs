@@ -736,7 +736,18 @@ namespace GroundDisplayRotationPlugin
 
         private bool TryParseAngle(string rawAngle, out int selectedAngle)
         {
-            return int.TryParse((rawAngle ?? string.Empty).Trim(), out selectedAngle) && selectedAngle >= 0 && selectedAngle <= 359;
+            if (!int.TryParse((rawAngle ?? string.Empty).Trim(), out selectedAngle))
+            {
+                return false;
+            }
+
+            if (selectedAngle == 360)
+            {
+                selectedAngle = 0;
+                return true;
+            }
+
+            return selectedAngle >= 0 && selectedAngle <= 359;
         }
 
         private Form GetOwnerForm(ToolStripItem item)
