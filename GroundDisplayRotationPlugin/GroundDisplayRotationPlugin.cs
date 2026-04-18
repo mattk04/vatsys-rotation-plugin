@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Drawing;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Windows.Forms;
 using vatsys;
 using vatsys.Plugin;
@@ -15,11 +17,11 @@ namespace GroundDisplayRotationPlugin
     [Export(typeof(IPlugin))]
     public class GroundDisplayRotationPlugin : IPlugin
     {
-        private readonly List<ToolStripMenuItem> rotationItems = new List<ToolStripMenuItem>();
         private readonly List<ToolStripMenuItem> resetItems = new List<ToolStripMenuItem>();
-        private readonly List<ToolStripMenuItem> debugItems = new List<ToolStripMenuItem>();
-        private readonly Dictionary<LogicalPositions.Position, float> originalRotation = new Dictionary<LogicalPositions.Position, float>();
-        private readonly int[] allowedAngles = new int[] { 0, 45, 90, 135, 180, 225, 270, 315 };
+        private readonly Dictionary<object, float> originalRotation = new Dictionary<object, float>(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<object, int> lastAngleByGroundControl = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<Form, ToolStripMenuItem> rotationMenusByForm = new Dictionary<Form, ToolStripMenuItem>();
+        private readonly Timer menuInjectionTimer = new Timer();
 
         public string Name
         {
@@ -28,46 +30,166 @@ namespace GroundDisplayRotationPlugin
 
         public GroundDisplayRotationPlugin()
         {
-            AddRotationMenuForWindowType(CustomToolStripMenuItemWindowType.ASMGCS);
+            StartMenuInjection();
         }
 
-        private void AddRotationMenuForWindowType(CustomToolStripMenuItemWindowType windowType)
+        private void StartMenuInjection()
+        {
+            menuInjectionTimer.Interval = 1000;
+            menuInjectionTimer.Tick += MenuInjectionTimer_Tick;
+            menuInjectionTimer.Start();
+            EnsureMenusInjected();
+        }
+
+        private void MenuInjectionTimer_Tick(object sender, EventArgs e)
+        {
+            EnsureMenusInjected();
+        }
+
+        private void EnsureMenusInjected()
+        {
+            try
+            {
+                foreach (Form form in Application.OpenForms)
+                {
+                    if (form == null || form.IsDisposed)
+                    {
+                        continue;
+                    }
+
+                    object groundControl = GetGroundControl(form);
+                    if (groundControl == null)
+                    {
+                        continue;
+                    }
+
+                    ToolStripMenuItem toolsMenu = FindToolsMenu(form);
+                    if (toolsMenu == null)
+                    {
+                        continue;
+                    }
+
+                    ToolStripMenuItem rotationRoot;
+                    if (!rotationMenusByForm.TryGetValue(form, out rotationRoot) || rotationRoot == null || rotationRoot.IsDisposed)
+                    {
+                        rotationRoot = CreateRotationRootMenuItem();
+                        rotationMenusByForm[form] = rotationRoot;
+                        form.FormClosed += GroundForm_FormClosed;
+                    }
+
+                    bool alreadyAttached = false;
+                    foreach (ToolStripItem item in toolsMenu.DropDownItems)
+                    {
+                        if (ReferenceEquals(item, rotationRoot))
+                        {
+                            alreadyAttached = true;
+                            break;
+                        }
+                    }
+
+                    if (!alreadyAttached)
+                    {
+                        toolsMenu.DropDownItems.Add(rotationRoot);
+                    }
+                }
+            }
+            catch
+            {
+                // Never allow UI/menu injection issues to break vatSys.
+            }
+        }
+
+        private void GroundForm_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            Form form = sender as Form;
+            if (form == null)
+            {
+                return;
+            }
+
+            rotationMenusByForm.Remove(form);
+        }
+
+        private ToolStripMenuItem FindToolsMenu(Form form)
+        {
+            FieldInfo toolsField = form.GetType().GetField("toolsToolStripMenuItem", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (toolsField != null)
+            {
+                ToolStripMenuItem toolsFromField = toolsField.GetValue(form) as ToolStripMenuItem;
+                if (toolsFromField != null)
+                {
+                    return toolsFromField;
+                }
+            }
+
+            foreach (Control control in GetAllControls(form))
+            {
+                MenuStrip menuStrip = control as MenuStrip;
+                if (menuStrip == null)
+                {
+                    continue;
+                }
+
+                foreach (ToolStripItem item in menuStrip.Items)
+                {
+                    ToolStripMenuItem menuItem = item as ToolStripMenuItem;
+                    if (menuItem == null)
+                    {
+                        continue;
+                    }
+
+                    string normalizedText = menuItem.Text == null ? string.Empty : menuItem.Text.Replace("&", string.Empty);
+                    if (string.Equals(normalizedText, "Tools", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return menuItem;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<Control> GetAllControls(Control root)
+        {
+            if (root == null)
+            {
+                yield break;
+            }
+
+            foreach (Control child in root.Controls)
+            {
+                yield return child;
+
+                foreach (Control descendant in GetAllControls(child))
+                {
+                    yield return descendant;
+                }
+            }
+        }
+
+        private ToolStripMenuItem CreateRotationRootMenuItem()
         {
             var rotationRoot = new ToolStripMenuItem("Ground Rotation");
 
-            foreach (int angle in allowedAngles)
+            var setAngleRootItem = new ToolStripMenuItem("Set rotation angle...")
             {
-                var item = new ToolStripMenuItem(string.Format("{0}°", angle))
-                {
-                    Tag = angle,
-                    CheckOnClick = false
-                };
-                item.Click += RotationMenuItem_Click;
-                rotationRoot.DropDownItems.Add(item);
-                rotationItems.Add(item);
-            }
+                CheckOnClick = false
+            };
+            setAngleRootItem.Click += SetRotationAngleMenuItem_Click;
 
-            rotationRoot.DropDownItems.Add(new ToolStripSeparator());
             var resetRootItem = new ToolStripMenuItem("Reset to original")
             {
                 Tag = -1,
                 CheckOnClick = false
             };
             resetRootItem.Click += RotationMenuItem_Click;
+
+            rotationRoot.DropDownItems.Add(setAngleRootItem);
+            rotationRoot.DropDownItems.Add(new ToolStripSeparator());
             rotationRoot.DropDownItems.Add(resetRootItem);
             resetItems.Add(resetRootItem);
 
-            var debugRootItem = new ToolStripMenuItem("Debug ground rotation")
-            {
-                Tag = -2,
-                CheckOnClick = false
-            };
-            debugRootItem.Click += DebugRotationState_Click;
-            rotationRoot.DropDownItems.Add(new ToolStripSeparator());
-            rotationRoot.DropDownItems.Add(debugRootItem);
-            debugItems.Add(debugRootItem);
-
-            MMI.AddCustomMenuItem(new CustomToolStripMenuItem(windowType, CustomToolStripMenuItemCategory.Tools, rotationRoot));
+            return rotationRoot;
         }
 
         public void OnFDRUpdate(FDP2.FDR updated)
@@ -111,10 +233,131 @@ namespace GroundDisplayRotationPlugin
 
                 ApplyRotation(groundControl, selectedAngle);
                 UpdateCheckedState(selectedAngle);
+
+                ToolStripDropDown dropDown = clickedItem.GetCurrentParent() as ToolStripDropDown;
+                if (dropDown != null)
+                {
+                    dropDown.Close(ToolStripDropDownCloseReason.ItemClicked);
+                }
+
+                Control control = groundControl as Control;
+                if (control != null && control.CanFocus)
+                {
+                    control.Focus();
+                }
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Ground rotation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+            }
+        }
+
+        private void SetRotationAngleMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                ToolStripMenuItem clickedItem = sender as ToolStripMenuItem;
+                if (clickedItem == null)
+                {
+                    return;
+                }
+
+                Form ownerForm = GetOwnerForm(clickedItem);
+                if (ownerForm == null)
+                {
+                    return;
+                }
+
+                object groundControl = GetGroundControl(ownerForm);
+                if (groundControl == null)
+                {
+                    return;
+                }
+
+                int prefilledAngle = 0;
+                int savedAngle;
+                if (lastAngleByGroundControl.TryGetValue(groundControl, out savedAngle))
+                {
+                    prefilledAngle = savedAngle;
+                }
+
+                int selectedAngle;
+                if (!TryPromptForAngle(prefilledAngle, out selectedAngle))
+                {
+                    return;
+                }
+
+                lastAngleByGroundControl[groundControl] = selectedAngle;
+                ApplyRotation(groundControl, selectedAngle);
+                UpdateCheckedState(selectedAngle);
+
+                ToolStripDropDown dropDown = clickedItem.GetCurrentParent() as ToolStripDropDown;
+                if (dropDown != null)
+                {
+                    dropDown.Close(ToolStripDropDownCloseReason.ItemClicked);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ground rotation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+            }
+        }
+
+        private bool TryPromptForAngle(int initialAngle, out int selectedAngle)
+        {
+            selectedAngle = initialAngle;
+
+            using (Form prompt = new Form())
+            using (TextBox input = new TextBox())
+            using (Button ok = new Button())
+            using (Button cancel = new Button())
+            {
+                prompt.Text = "Ground Rotation Angle";
+                prompt.FormBorderStyle = FormBorderStyle.FixedDialog;
+                prompt.StartPosition = FormStartPosition.CenterParent;
+                prompt.MinimizeBox = false;
+                prompt.MaximizeBox = false;
+                prompt.ClientSize = new Size(240, 92);
+                prompt.ShowInTaskbar = false;
+
+                Label label = new Label();
+                label.Text = "Enter angle (0-359):";
+                label.AutoSize = true;
+                label.Location = new Point(10, 10);
+
+                input.Location = new Point(12, 30);
+                input.Width = 214;
+                input.Text = initialAngle.ToString("D3");
+
+                ok.Text = "OK";
+                ok.DialogResult = DialogResult.OK;
+                ok.Location = new Point(70, 60);
+
+                cancel.Text = "Cancel";
+                cancel.DialogResult = DialogResult.Cancel;
+                cancel.Location = new Point(145, 60);
+
+                prompt.Controls.Add(label);
+                prompt.Controls.Add(input);
+                prompt.Controls.Add(ok);
+                prompt.Controls.Add(cancel);
+                prompt.AcceptButton = ok;
+                prompt.CancelButton = cancel;
+
+                if (prompt.ShowDialog() != DialogResult.OK)
+                {
+                    return false;
+                }
+
+                int parsedAngle;
+                if (!int.TryParse(input.Text.Trim(), out parsedAngle) || parsedAngle < 0 || parsedAngle > 359)
+                {
+                    MessageBox.Show("Please enter a whole number between 0 and 359.", "Ground Rotation Input");
+                    return false;
+                }
+
+                selectedAngle = parsedAngle;
+                return true;
             }
         }
 
@@ -243,15 +486,22 @@ namespace GroundDisplayRotationPlugin
 
         private void ApplyRotation(object groundControl, int angle)
         {
-            PropertyInfo displayPositionProperty = groundControl.GetType().GetProperty("DisplayPosition", BindingFlags.Instance | BindingFlags.Public);
             LogicalPositions.Position displayPosition = null;
-            if (displayPositionProperty != null)
+            TryGetDisplayPosition(groundControl, out displayPosition);
+            if (displayPosition != null)
             {
-                object displayPositionValue = displayPositionProperty.GetValue(groundControl);
-                displayPosition = displayPositionValue as LogicalPositions.Position;
-                if (displayPosition != null && !originalRotation.ContainsKey(displayPosition))
+                if (!originalRotation.ContainsKey(groundControl))
                 {
-                    originalRotation[displayPosition] = displayPosition.Rotation;
+                    originalRotation[groundControl] = displayPosition.Rotation;
+                }
+            }
+
+            if (!originalRotation.ContainsKey(groundControl))
+            {
+                float currentRenderRotation;
+                if (TryGetCurrentRenderRotation(groundControl, out currentRenderRotation))
+                {
+                    originalRotation[groundControl] = currentRenderRotation;
                 }
             }
 
@@ -264,138 +514,109 @@ namespace GroundDisplayRotationPlugin
                 }
             }
 
-            float newRotation = angle;
             if (angle < 0)
             {
-                if (displayPosition != null)
+                float newRotation = 0f;
+                float savedRotation;
+                if (originalRotation.TryGetValue(groundControl, out savedRotation))
                 {
-                    float savedRotation;
-                    if (originalRotation.TryGetValue(displayPosition, out savedRotation))
-                    {
-                        newRotation = savedRotation;
-                    }
-                    else
-                    {
-                        newRotation = displayPosition.Rotation;
-                    }
+                    newRotation = savedRotation;
                 }
-                else
+
+                SetRenderRotation(groundControl, newRotation, displayPosition);
+
+                Control control = groundControl as Control;
+                if (control != null)
                 {
-                    newRotation = 0f;
+                    control.Invalidate();
+                    control.Update();
                 }
+                return;
             }
 
+            float newRotationApplied = angle;
             if (displayPosition != null)
             {
-                displayPosition.Rotation = newRotation;
+                newRotationApplied -= displayPosition.MagneticVariation;
             }
 
-            SetRenderRotation(groundControl, newRotation, displayPosition);
+            SetRenderRotation(groundControl, newRotationApplied, displayPosition);
 
-            Control control = groundControl as Control;
-            if (control != null)
+            Control targetControl = groundControl as Control;
+            if (targetControl != null)
             {
-                control.Invalidate();
-                control.Update();
+                targetControl.Invalidate();
+                targetControl.Update();
             }
         }
 
-        private void DebugRotationState_Click(object sender, EventArgs e)
+        private bool TryGetDisplayPosition(object groundControl, out LogicalPositions.Position displayPosition)
         {
-            try
+            displayPosition = null;
+            if (groundControl == null)
             {
-                var clickedItem = sender as ToolStripMenuItem;
-                if (clickedItem == null)
-                {
-                    return;
-                }
-
-                Form ownerForm = GetOwnerForm(clickedItem);
-                if (ownerForm == null)
-                {
-                    MessageBox.Show("Could not find owning form.", "Ground Rotation Debug");
-                    return;
-                }
-
-                object groundControl = GetGroundControl(ownerForm);
-                if (groundControl == null)
-                {
-                    MessageBox.Show("Could not find ASMGCS ground control.", "Ground Rotation Debug");
-                    return;
-                }
-
-                string message = "Owner form: " + ownerForm.GetType().FullName + "\r\n";
-                message += "Ground control: " + groundControl.GetType().FullName + "\r\n";
-
-                PropertyInfo displayPositionProperty = groundControl.GetType().GetProperty("DisplayPosition", BindingFlags.Instance | BindingFlags.Public);
-                if (displayPositionProperty != null)
-                {
-                    object displayPositionValue = displayPositionProperty.GetValue(groundControl);
-                    LogicalPositions.Position displayPosition = displayPositionValue as LogicalPositions.Position;
-                    if (displayPosition != null)
-                    {
-                        message += "Display position: " + displayPosition.Name + "\r\n";
-                        message += "Display position rotation: " + displayPosition.Rotation + "\r\n";
-                    }
-                    else
-                    {
-                        message += "Display position: null\r\n";
-                    }
-                }
-                else
-                {
-                    message += "DisplayPosition property not found.\r\n";
-                }
-
-                MethodInfo getRenderParamsMethod = groundControl.GetType().GetMethod("GetRenderParams", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(bool) }, null);
-                if (getRenderParamsMethod == null)
-                {
-                    getRenderParamsMethod = groundControl.GetType().GetMethod("GetRenderParams", BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
-                }
-                message += "GetRenderParams found: " + (getRenderParamsMethod != null) + "\r\n";
-                if (getRenderParamsMethod != null)
-                {
-                    object[] getRenderParamsArgs = getRenderParamsMethod.GetParameters().Length == 0 ? null : new object[] { false };
-                    object renderParams = getRenderParamsMethod.Invoke(groundControl, getRenderParamsArgs);
-                    if (renderParams != null)
-                    {
-                        Type renderParamsType = renderParams.GetType();
-                        PropertyInfo rotationProperty = renderParamsType.GetProperty("Rotation");
-                        if (rotationProperty != null)
-                        {
-                            object rotationValue = rotationProperty.GetValue(renderParams);
-                            double rotationDouble = rotationValue == null ? double.NaN : Convert.ToDouble(rotationValue);
-                            message += "Render rotation rad: " + rotationValue + "\r\n";
-                            message += "Render rotation deg: " + Conversions.RadiansToDegrees(rotationDouble) + "\r\n";
-                        }
-                        else
-                        {
-                            message += "Rotation property not found on render params.\r\n";
-                        }
-                    }
-                    else
-                    {
-                        message += "GetRenderParams returned null.\r\n";
-                    }
-                }
-
-                MethodInfo setRenderParamsMethod = null;
-                foreach (MethodInfo method in groundControl.GetType().GetMethods(BindingFlags.Instance | BindingFlags.NonPublic))
-                {
-                    if (method.Name == "SetRenderParams" && method.GetParameters().Length == 10)
-                    {
-                        setRenderParamsMethod = method;
-                        break;
-                    }
-                }
-                message += "SetRenderParams found: " + (setRenderParamsMethod != null) + "\r\n";
-
-                MessageBox.Show(message, "Ground Rotation Debug");
+                return false;
             }
-            catch (Exception ex)
+
+            PropertyInfo displayPositionProperty = groundControl.GetType().GetProperty("DisplayPosition", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (displayPositionProperty != null)
             {
-                MessageBox.Show("Ground rotation debug failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Debug");
+                object displayPositionValue = displayPositionProperty.GetValue(groundControl);
+                displayPosition = displayPositionValue as LogicalPositions.Position;
             }
+            if (displayPosition == null)
+            {
+                FieldInfo displayPositionField = groundControl.GetType().GetField("displayPosition", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (displayPositionField != null)
+                {
+                    object displayPositionValue = displayPositionField.GetValue(groundControl);
+                    displayPosition = displayPositionValue as LogicalPositions.Position;
+                }
+            }
+
+            return displayPosition != null;
+        }
+
+        private bool TryGetCurrentRenderRotation(object groundControl, out float rotationDegrees)
+        {
+            rotationDegrees = 0f;
+            if (groundControl == null)
+            {
+                return false;
+            }
+
+            MethodInfo getRenderParamsMethod = groundControl.GetType().GetMethod("GetRenderParams", BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(bool) }, null);
+            if (getRenderParamsMethod == null)
+            {
+                getRenderParamsMethod = groundControl.GetType().GetMethod("GetRenderParams", BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+            }
+            if (getRenderParamsMethod == null)
+            {
+                return false;
+            }
+
+            object[] getRenderParamsArgs = getRenderParamsMethod.GetParameters().Length == 0 ? null : new object[] { false };
+            object renderParams = getRenderParamsMethod.Invoke(groundControl, getRenderParamsArgs);
+            if (renderParams == null)
+            {
+                return false;
+            }
+
+            PropertyInfo rotationProperty = renderParams.GetType().GetProperty("Rotation");
+            if (rotationProperty == null)
+            {
+                return false;
+            }
+
+            object rotationValue = rotationProperty.GetValue(renderParams);
+            if (rotationValue == null)
+            {
+                return false;
+            }
+
+            double rotationRadians = Convert.ToDouble(rotationValue);
+            rotationDegrees = (float)(-Conversions.RadiansToDegrees(rotationRadians));
+            return true;
         }
 
         private void SetRenderRotation(object groundControl, float rotationDegrees, LogicalPositions.Position displayPosition)
@@ -428,10 +649,7 @@ namespace GroundDisplayRotationPlugin
             uint[] visibleMaps = (uint[])renderParamsType.GetProperty("VisibleMaps").GetValue(renderParams);
 
             float effectiveRotation = rotationDegrees;
-            if (displayPosition != null)
-            {
-                effectiveRotation += displayPosition.MagneticVariation;
-            }
+            effectiveRotation = -effectiveRotation;
 
             MethodInfo setRenderParamsMethod = null;
             foreach (MethodInfo method in groundControl.GetType().GetMethods(BindingFlags.Instance | BindingFlags.NonPublic))
@@ -465,18 +683,24 @@ namespace GroundDisplayRotationPlugin
 
         private void UpdateCheckedState(int selectedAngle)
         {
-            foreach (ToolStripMenuItem item in rotationItems)
-            {
-                object tag = item.Tag;
-                if (tag is int)
-                {
-                    int angle = (int)tag;
-                    item.Checked = angle == selectedAngle;
-                }
-            }
             foreach (ToolStripMenuItem resetItem in resetItems)
             {
                 resetItem.Checked = selectedAngle < 0;
+            }
+        }
+
+        private class ReferenceEqualityComparer : IEqualityComparer<object>
+        {
+            public static readonly ReferenceEqualityComparer Instance = new ReferenceEqualityComparer();
+
+            public new bool Equals(object x, object y)
+            {
+                return ReferenceEquals(x, y);
+            }
+
+            public int GetHashCode(object obj)
+            {
+                return RuntimeHelpers.GetHashCode(obj);
             }
         }
     }
