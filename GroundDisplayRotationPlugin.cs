@@ -228,14 +228,14 @@ namespace GroundDisplayRotationPlugin
             var applyLabel = new ApplyLabelHost(headingInput);
             applyLabel.ApplyLabel.Click += ApplyLabel_Click;
 
-            var resetRootItem = new ToolStripMenuItem("Reset to Original Heading")
+            var resetRootItem = new ToolStripMenuItem("Reset to Original Orientation")
             {
                 Tag = -1,
                 CheckOnClick = false
             };
             resetRootItem.Click += RotationMenuItem_Click;
 
-            var savedHeadingsItem = new ToolStripMenuItem("Saved Headings")
+            var savedHeadingsItem = new ToolStripMenuItem("Saved Orientations")
             {
                 Name = SavedHeadingsMenuKey
             };
@@ -246,7 +246,7 @@ namespace GroundDisplayRotationPlugin
                 savedHeadingsMenu.ShowCheckMargin = false;
             }
 
-            var saveHeadingItem = new ToolStripMenuItem("Save Current Heading");
+            var saveHeadingItem = new ToolStripMenuItem("Save Current Orientation");
             saveHeadingItem.Click += SaveHeadingItem_Click;
 
             var clearAutoApplyItem = new ToolStripMenuItem("Disable Auto-Load")
@@ -592,7 +592,7 @@ namespace GroundDisplayRotationPlugin
                 int heading;
                 if (!TryGetCurrentOrLastHeading(groundControl, out heading))
                 {
-                    MessageBox.Show("No heading is currently available to save.", "Ground Rotation");
+                    MessageBox.Show("No orientation is currently available to save.", "Ground Rotation");
                     return;
                 }
 
@@ -605,7 +605,7 @@ namespace GroundDisplayRotationPlugin
 
                 rotationStore.AddOrUpdateSavedHeading(aerodromeKey, heading, headingLabel);
 
-                string message = "Saved heading " + heading.ToString("D3") + " for " + aerodromeKey + ".";
+                string message = "Saved orientation " + heading.ToString("D3") + " for " + aerodromeKey + ".";
                 if (!string.IsNullOrEmpty(headingLabel))
                 {
                     message += " Label: " + headingLabel + ".";
@@ -614,7 +614,7 @@ namespace GroundDisplayRotationPlugin
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Save heading failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+                MessageBox.Show("Save orientation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
             }
         }
 
@@ -655,7 +655,7 @@ namespace GroundDisplayRotationPlugin
                 int heading = (int)tag;
 
                 rotationStore.SetAutoApplyHeading(aerodromeKey, heading);
-                MessageBox.Show("Auto-apply set to " + heading.ToString("D3") + " for " + aerodromeKey + ".", "Ground Rotation");
+                MessageBox.Show("Auto-load set to " + heading.ToString("D3") + " for " + aerodromeKey + ".", "Ground Rotation");
             }
             catch (Exception ex)
             {
@@ -693,11 +693,11 @@ namespace GroundDisplayRotationPlugin
                 }
 
                 rotationStore.ClearAutoApplyHeading(aerodromeKey);
-                MessageBox.Show("Cleared auto-apply heading for " + aerodromeKey + ".", "Ground Rotation");
+                MessageBox.Show("Cleared auto-load orientation for " + aerodromeKey + ".", "Ground Rotation");
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Clear auto-apply failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+                MessageBox.Show("Clear auto-load failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
             }
         }
 
@@ -736,7 +736,7 @@ namespace GroundDisplayRotationPlugin
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Load heading failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+                MessageBox.Show("Load orientation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
             }
         }
 
@@ -778,12 +778,12 @@ namespace GroundDisplayRotationPlugin
 
                 if (rotationStore.RemoveSavedHeading(aerodromeKey, heading))
                 {
-                    MessageBox.Show("Deleted heading " + heading.ToString("D3") + " for " + aerodromeKey + ".", "Ground Rotation");
+                    MessageBox.Show("Deleted orientation " + heading.ToString("D3") + " for " + aerodromeKey + ".", "Ground Rotation");
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Delete heading failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+                MessageBox.Show("Delete orientation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
             }
         }
 
@@ -793,7 +793,7 @@ namespace GroundDisplayRotationPlugin
 
             using (Form dialog = new Form())
             {
-                dialog.Text = "Save Heading";
+                dialog.Text = "Save Orientation";
                 dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                 dialog.StartPosition = FormStartPosition.CenterParent;
                 dialog.MinimizeBox = false;
@@ -803,7 +803,7 @@ namespace GroundDisplayRotationPlugin
 
                 Label promptLabel = new Label();
                 promptLabel.AutoSize = false;
-                promptLabel.Text = "Optional label for heading " + heading.ToString("D3") + ":";
+                promptLabel.Text = "Optional label for orientation " + heading.ToString("D3") + ":";
                 promptLabel.SetBounds(12, 12, 336, 20);
 
                 TextBox labelInput = new TextBox();
@@ -863,7 +863,7 @@ namespace GroundDisplayRotationPlugin
             if (headings.Count == 0)
             {
                 savedHeadingsMenu.Enabled = false;
-                savedHeadingsMenu.DropDownItems.Add(new ToolStripMenuItem("No saved headings") { Enabled = false });
+                savedHeadingsMenu.DropDownItems.Add(new ToolStripMenuItem("No saved orientations") { Enabled = false });
                 return;
             }
 

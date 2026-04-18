@@ -42,7 +42,7 @@ The default rotations of the ground map at each location are generally sufficien
 If you are using the local MSBuild on Windows, run:
 
 ```powershell
-& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe' .\GroundDisplayRotationPlugin.csproj /p:Configuration=Release
+& 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe' .\GroundDisplayRotationPlugin.csproj /p:Configuration=Release
 ```
 - The project currently references `C:\Program Files (x86)\vatSys\bin\vatSys.exe`.
 - If your vatSys installation path is different, update `GroundDisplayRotationPlugin.csproj`.
