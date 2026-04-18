@@ -194,15 +194,21 @@ namespace GroundDisplayRotationPlugin
 
         private ToolStripMenuItem CreateRotationRootMenuItem()
         {
-            var rotationRoot = new ToolStripMenuItem("Ground Rotation");
+            var rotationRoot = new ToolStripMenuItem("Rotate View");
+            ToolStripDropDownMenu rotationMenu = rotationRoot.DropDown as ToolStripDropDownMenu;
+            if (rotationMenu != null)
+            {
+                rotationMenu.ShowImageMargin = false;
+                rotationMenu.ShowCheckMargin = false;
+            }
 
-            var setAngleRootItem = new ToolStripMenuItem("Set rotation angle...")
+            var setAngleRootItem = new ToolStripMenuItem("Set Rotation Heading")
             {
                 CheckOnClick = false
             };
             setAngleRootItem.Click += SetRotationAngleMenuItem_Click;
 
-            var resetRootItem = new ToolStripMenuItem("Reset to original")
+            var resetRootItem = new ToolStripMenuItem("Reset to Original")
             {
                 Tag = -1,
                 CheckOnClick = false
@@ -356,7 +362,7 @@ namespace GroundDisplayRotationPlugin
                 prompt.ShowInTaskbar = false;
 
                 Label label = new Label();
-                label.Text = "Enter angle (0-359):";
+                label.Text = "Enter Magnetic Heading (000-359):";
                 label.AutoSize = true;
                 label.Location = new Point(10, 10);
 
@@ -387,7 +393,7 @@ namespace GroundDisplayRotationPlugin
                 int parsedAngle;
                 if (!int.TryParse(input.Text.Trim(), out parsedAngle) || parsedAngle < 0 || parsedAngle > 359)
                 {
-                    MessageBox.Show("Please enter a whole number between 0 and 359.", "Ground Rotation Input");
+                    MessageBox.Show("Please enter a whole number between 000 and 359.", "Ground Rotation Input");
                     return false;
                 }
 
