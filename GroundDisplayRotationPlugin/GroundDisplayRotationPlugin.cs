@@ -19,9 +19,12 @@ namespace GroundDisplayRotationPlugin
     {
         private readonly List<ToolStripMenuItem> resetItems = new List<ToolStripMenuItem>();
         private readonly Dictionary<object, float> originalRotation = new Dictionary<object, float>(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<object, Dictionary<object, float>> originalRotationByPosition = new Dictionary<object, Dictionary<object, float>>(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<object, int> lastAngleByGroundControl = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<Form, ToolStripMenuItem> rotationMenusByForm = new Dictionary<Form, ToolStripMenuItem>();
         private readonly Timer menuInjectionTimer = new Timer();
+        private readonly List<string> debugLines = new List<string>();
+        private DebugLogForm debugLogForm;
 
         public string Name
         {
@@ -107,6 +110,14 @@ namespace GroundDisplayRotationPlugin
                 return;
             }
 
+            object groundControl = GetGroundControl(form);
+            if (groundControl != null)
+            {
+                originalRotation.Remove(groundControl);
+                originalRotationByPosition.Remove(groundControl);
+                lastAngleByGroundControl.Remove(groundControl);
+            }
+
             rotationMenusByForm.Remove(form);
         }
 
@@ -184,9 +195,17 @@ namespace GroundDisplayRotationPlugin
             };
             resetRootItem.Click += RotationMenuItem_Click;
 
+            var debugRootItem = new ToolStripMenuItem("Show rotation debug")
+            {
+                CheckOnClick = false
+            };
+            debugRootItem.Click += ShowRotationDebug_Click;
+
             rotationRoot.DropDownItems.Add(setAngleRootItem);
             rotationRoot.DropDownItems.Add(new ToolStripSeparator());
             rotationRoot.DropDownItems.Add(resetRootItem);
+            rotationRoot.DropDownItems.Add(new ToolStripSeparator());
+            rotationRoot.DropDownItems.Add(debugRootItem);
             resetItems.Add(resetRootItem);
 
             return rotationRoot;
@@ -249,6 +268,44 @@ namespace GroundDisplayRotationPlugin
             catch (Exception ex)
             {
                 MessageBox.Show("Ground rotation failed: " + ex.GetType().Name + ": " + ex.Message, "Ground Rotation Error");
+            }
+        }
+
+        private void ShowRotationDebug_Click(object sender, EventArgs e)
+        {
+            if (debugLogForm == null || debugLogForm.IsDisposed)
+            {
+                debugLogForm = new DebugLogForm();
+            }
+
+            debugLogForm.SetLines(debugLines);
+            if (!debugLogForm.Visible)
+            {
+                debugLogForm.Show();
+            }
+            else
+            {
+                debugLogForm.BringToFront();
+            }
+        }
+
+        private void AppendDebug(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+            {
+                return;
+            }
+
+            string line = DateTime.Now.ToString("HH:mm:ss.fff") + " | " + message;
+            debugLines.Add(line);
+            if (debugLines.Count > 400)
+            {
+                debugLines.RemoveAt(0);
+            }
+
+            if (debugLogForm != null && !debugLogForm.IsDisposed)
+            {
+                debugLogForm.AppendLine(line);
             }
         }
 
@@ -484,25 +541,84 @@ namespace GroundDisplayRotationPlugin
             return type.Name == "ASDControlDX" || type.FullName == "vatsys.ASDControlDX";
         }
 
+        private static string GetPositionKey(LogicalPositions.Position displayPosition)
+        {
+            if (displayPosition == null)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrEmpty(displayPosition.Name))
+            {
+                return displayPosition.Name;
+            }
+
+            return displayPosition.GetHashCode().ToString();
+        }
+
+        private void CaptureOriginalRotationForPosition(object groundControl, LogicalPositions.Position displayPosition, float renderRotationDegrees)
+        {
+            if (groundControl == null || displayPosition == null)
+            {
+                return;
+            }
+
+            Dictionary<object, float> perPositionRotations;
+            if (!originalRotationByPosition.TryGetValue(groundControl, out perPositionRotations))
+            {
+                perPositionRotations = new Dictionary<object, float>(ReferenceEqualityComparer.Instance);
+                originalRotationByPosition[groundControl] = perPositionRotations;
+            }
+
+            if (!perPositionRotations.ContainsKey(displayPosition))
+            {
+                perPositionRotations[displayPosition] = renderRotationDegrees;
+                AppendDebug("Captured baseline for position '" + GetPositionKey(displayPosition) + "' (render-space): " + renderRotationDegrees.ToString("0.###") + " deg");
+            }
+        }
+
+        private bool TryGetOriginalRotationForPosition(object groundControl, LogicalPositions.Position displayPosition, out float rotation)
+        {
+            rotation = 0f;
+            if (groundControl == null || displayPosition == null)
+            {
+                return false;
+            }
+
+            Dictionary<object, float> perPositionRotations;
+            if (!originalRotationByPosition.TryGetValue(groundControl, out perPositionRotations) || perPositionRotations == null)
+            {
+                return false;
+            }
+
+            return perPositionRotations.TryGetValue(displayPosition, out rotation);
+        }
+
         private void ApplyRotation(object groundControl, int angle)
         {
             LogicalPositions.Position displayPosition = null;
             TryGetDisplayPosition(groundControl, out displayPosition);
-            if (displayPosition != null)
+            string positionName = GetPositionKey(displayPosition);
+            float currentRenderRotation = 0f;
+            bool hasCurrentRenderRotation = TryGetCurrentRenderRotation(groundControl, out currentRenderRotation);
+
+            AppendDebug("Apply requested: angle=" + angle + ", position='" + (positionName ?? "<null>") + "'");
+
+            if (hasCurrentRenderRotation && !originalRotation.ContainsKey(groundControl))
             {
-                if (!originalRotation.ContainsKey(groundControl))
-                {
-                    originalRotation[groundControl] = displayPosition.Rotation;
-                }
+                originalRotation[groundControl] = currentRenderRotation;
+                AppendDebug("Captured control baseline (render-space): " + currentRenderRotation.ToString("0.###") + " deg");
             }
 
-            if (!originalRotation.ContainsKey(groundControl))
+            if (displayPosition != null && hasCurrentRenderRotation)
             {
-                float currentRenderRotation;
-                if (TryGetCurrentRenderRotation(groundControl, out currentRenderRotation))
-                {
-                    originalRotation[groundControl] = currentRenderRotation;
-                }
+                CaptureOriginalRotationForPosition(groundControl, displayPosition, currentRenderRotation);
+            }
+
+            if (!originalRotation.ContainsKey(groundControl) && displayPosition != null)
+            {
+                originalRotation[groundControl] = displayPosition.Rotation;
+                AppendDebug("Captured control baseline fallback (display-space): " + displayPosition.Rotation.ToString("0.###") + " deg");
             }
 
             if (displayPosition == null)
@@ -518,12 +634,23 @@ namespace GroundDisplayRotationPlugin
             {
                 float newRotation = 0f;
                 float savedRotation;
-                if (originalRotation.TryGetValue(groundControl, out savedRotation))
+                if (TryGetOriginalRotationForPosition(groundControl, displayPosition, out savedRotation))
                 {
                     newRotation = savedRotation;
+                    AppendDebug("Reset using position baseline: " + newRotation.ToString("0.###") + " deg");
+                }
+                else if (originalRotation.TryGetValue(groundControl, out savedRotation))
+                {
+                    newRotation = savedRotation;
+                    AppendDebug("Reset using control baseline: " + newRotation.ToString("0.###") + " deg");
+                }
+                else
+                {
+                    AppendDebug("Reset fallback used: 0 deg (no baseline found)");
                 }
 
                 SetRenderRotation(groundControl, newRotation, displayPosition);
+                AppendDebug("SetRenderRotation called with " + newRotation.ToString("0.###") + " deg (reset)");
 
                 Control control = groundControl as Control;
                 if (control != null)
@@ -538,9 +665,11 @@ namespace GroundDisplayRotationPlugin
             if (displayPosition != null)
             {
                 newRotationApplied -= displayPosition.MagneticVariation;
+                AppendDebug("Computed applied rotation: entered=" + angle + " minus magvar=" + displayPosition.MagneticVariation.ToString("0.###") + " => " + newRotationApplied.ToString("0.###") + " deg");
             }
 
             SetRenderRotation(groundControl, newRotationApplied, displayPosition);
+            AppendDebug("SetRenderRotation called with " + newRotationApplied.ToString("0.###") + " deg (user command)");
 
             Control targetControl = groundControl as Control;
             if (targetControl != null)
@@ -701,6 +830,60 @@ namespace GroundDisplayRotationPlugin
             public int GetHashCode(object obj)
             {
                 return RuntimeHelpers.GetHashCode(obj);
+            }
+        }
+
+        private class DebugLogForm : Form
+        {
+            private readonly TextBox logTextBox;
+
+            public DebugLogForm()
+            {
+                Text = "Ground Rotation Debug";
+                StartPosition = FormStartPosition.CenterScreen;
+                Size = new Size(700, 420);
+
+                logTextBox = new TextBox();
+                logTextBox.Multiline = true;
+                logTextBox.ScrollBars = ScrollBars.Both;
+                logTextBox.ReadOnly = true;
+                logTextBox.WordWrap = false;
+                logTextBox.Dock = DockStyle.Fill;
+
+                Controls.Add(logTextBox);
+            }
+
+            public void SetLines(List<string> lines)
+            {
+                if (lines == null || lines.Count == 0)
+                {
+                    logTextBox.Clear();
+                    return;
+                }
+
+                logTextBox.Lines = lines.ToArray();
+                logTextBox.SelectionStart = logTextBox.TextLength;
+                logTextBox.ScrollToCaret();
+            }
+
+            public void AppendLine(string line)
+            {
+                if (string.IsNullOrEmpty(line))
+                {
+                    return;
+                }
+
+                if (logTextBox.TextLength == 0)
+                {
+                    logTextBox.Text = line;
+                }
+                else
+                {
+                    logTextBox.AppendText(Environment.NewLine + line);
+                }
+
+                logTextBox.SelectionStart = logTextBox.TextLength;
+                logTextBox.ScrollToCaret();
             }
         }
     }
