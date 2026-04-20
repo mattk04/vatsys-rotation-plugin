@@ -23,7 +23,7 @@ The default rotations of the ground map at each location are generally sufficien
 
 #### Maximise Screen Real-estate
 Better fit awkward aerodromes into whatever space you have left on your monitor.
-<br><img width="600" alt="sy3" src="https://github.com/user-attachments/assets/e22a024d-268b-4921-938d-0ed20474bcee" />
+<br><img width="700" alt="sy3" src="https://github.com/user-attachments/assets/e22a024d-268b-4921-938d-0ed20474bcee" />
 
 #### Align Ground Windows with the Air Window while Top Down
 Some locations like YBRM have a near 180 degree rotation between the air display and ground display by default. Rotate the display to be north-up, to make it intiutive which parts of the ground display interact with the air display.
