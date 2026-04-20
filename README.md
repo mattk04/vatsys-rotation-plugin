@@ -22,13 +22,16 @@ Saved orientations and auto-load values are stored in:
 The default rotations of the ground map at each location are generally sufficient for most needs. At some locations, however, it may be beneficial to rotate the display to better fit the available space (for controllers with limited screen real estate) or to better align the aerodrome with any surrounding windows (for controllers when top down.
 
 #### Maximise Screen Real-estate
-<img width="600" alt="sy1" src="https://github.com/user-attachments/assets/5c30f115-7b89-47b6-aeb5-1c1eadc22e19" />
-<img width="600" alt="sy2" src="https://github.com/user-attachments/assets/be7967cb-6810-46be-b980-74e75686cf2b" />
+Fit 
 <img width="600" alt="sy3" src="https://github.com/user-attachments/assets/e22a024d-268b-4921-938d-0ed20474bcee" />
-
 
 #### Align Ground Windows with the Air Window while Top Down
 <img width="700" alt="cb" src="https://github.com/user-attachments/assets/df6c1d43-7452-4e58-aed3-c8c560b6a042" />
+
+#### Match Tower View while Controlling Specific Aerodrome Positions
+E.g. Brisbane ADC West
+<img width="700" alt="bn" src="https://github.com/user-attachments/assets/e3c41e16-6f36-4f0a-875f-0cc1f5f7ac60" />
+
 
 ## Install
 
