@@ -225,6 +225,10 @@ namespace GroundDisplayRotationPlugin
             headingInput.InputTextBox.Leave += HeadingInput_Leave;
             headingInput.InputTextBox.Tag = headingInput;
 
+            var headingSlider = new HeadingSliderHost();
+            headingSlider.HeadingSlider.Tag = headingSlider;
+            headingSlider.HeadingSlider.ValueChanged += HeadingSlider_ValueChanged;
+
             var applyLabel = new ApplyLabelHost(headingInput);
             applyLabel.ApplyLabel.Click += ApplyLabel_Click;
 
@@ -257,6 +261,7 @@ namespace GroundDisplayRotationPlugin
 
             rotationRoot.DropDownItems.Add(headingLabel);
             rotationRoot.DropDownItems.Add(headingInput);
+            rotationRoot.DropDownItems.Add(headingSlider);
             rotationRoot.DropDownItems.Add(applyLabel);
             rotationRoot.DropDownItems.Add(new ToolStripSeparator());
             rotationRoot.DropDownItems.Add(saveHeadingItem);
@@ -323,9 +328,11 @@ namespace GroundDisplayRotationPlugin
             }
 
             headingInput.InputTextBox.Text = prefilledAngle.ToString("D3");
+            SetHeadingSliderValue(headingInput, prefilledAngle);
             PopulateSavedHeadingsMenu(rotationRoot, groundControl);
             UpdateAutoApplyMenuState(rotationRoot, groundControl);
             EnsureHeadingInputStyled(ownerForm, rotationRoot, headingInput, false);
+            UpdateInlineControlWidths(rotationRoot);
         }
 
         private void RotationRoot_DropDownOpened(object sender, EventArgs e)
@@ -349,6 +356,46 @@ namespace GroundDisplayRotationPlugin
             }
 
             EnsureHeadingInputStyled(ownerForm, rotationRoot, headingInput, true);
+            UpdateInlineControlWidths(rotationRoot);
+        }
+
+        private void UpdateInlineControlWidths(ToolStripMenuItem rotationRoot)
+        {
+            if (rotationRoot == null)
+            {
+                return;
+            }
+
+            HeadingInputHost headingInput = GetHeadingInput(rotationRoot);
+            HeadingSliderHost headingSlider = GetHeadingSlider(rotationRoot);
+            ToolStripDropDownMenu dropDownMenu = rotationRoot.DropDown as ToolStripDropDownMenu;
+            if (headingInput == null || headingSlider == null || dropDownMenu == null)
+            {
+                return;
+            }
+
+            int dropDownWidth = dropDownMenu.ClientSize.Width;
+            if (dropDownWidth <= 0)
+            {
+                dropDownWidth = dropDownMenu.Width;
+            }
+            if (dropDownWidth <= 0)
+            {
+                return;
+            }
+
+            int leftInset = headingInput.Bounds.Left;
+            if (leftInset <= 0)
+            {
+                leftInset = 8;
+            }
+
+            int targetWidth = dropDownWidth - (leftInset * 2);
+            targetWidth = Math.Max(120, targetWidth);
+
+            headingInput.SetPreferredWidth(targetWidth);
+            headingSlider.SetPreferredWidth(targetWidth);
+            dropDownMenu.PerformLayout();
         }
 
         private void RotationMenuItem_Click(object sender, EventArgs e)
@@ -515,6 +562,39 @@ namespace GroundDisplayRotationPlugin
             ApplyRotationFromInlineInput(headingInput, false);
         }
 
+        private void HeadingSlider_ValueChanged(object sender, EventArgs e)
+        {
+            HeadingSliderControl slider = sender as HeadingSliderControl;
+            HeadingSliderHost headingSliderHost = slider == null ? null : slider.Tag as HeadingSliderHost;
+            if (headingSliderHost == null || headingSliderHost.IsSynchronizing)
+            {
+                return;
+            }
+
+            Form ownerForm = GetOwnerForm(headingSliderHost);
+            if (ownerForm == null)
+            {
+                return;
+            }
+
+            object groundControl = GetGroundControl(ownerForm);
+            if (groundControl == null)
+            {
+                return;
+            }
+
+            int selectedAngle = headingSliderHost.HeadingSlider.Value;
+            lastAngleByGroundControl[groundControl] = selectedAngle;
+            ApplyRotation(groundControl, selectedAngle);
+            UpdateCheckedState(selectedAngle);
+
+            HeadingInputHost headingInput = GetHeadingInputFromContainer(headingSliderHost);
+            if (headingInput != null)
+            {
+                headingInput.InputTextBox.Text = selectedAngle.ToString("D3");
+            }
+        }
+
         private bool ApplyRotationFromInlineInput(HeadingInputHost headingInput, bool notifyOnInvalidInput)
         {
             try
@@ -551,6 +631,7 @@ namespace GroundDisplayRotationPlugin
                 UpdateCheckedState(selectedAngle);
 
                 headingInput.InputTextBox.Text = selectedAngle.ToString("D3");
+                SetHeadingSliderValue(headingInput, selectedAngle);
                 return true;
             }
             catch (Exception ex)
@@ -733,6 +814,14 @@ namespace GroundDisplayRotationPlugin
                 lastAngleByGroundControl[groundControl] = heading;
                 ApplyRotation(groundControl, heading);
                 UpdateCheckedState(heading);
+
+                ToolStripMenuItem rotationRoot = FindRotationRoot(clickedItem);
+                HeadingInputHost headingInput = GetHeadingInput(rotationRoot);
+                if (headingInput != null)
+                {
+                    headingInput.InputTextBox.Text = heading.ToString("D3");
+                    SetHeadingSliderValue(headingInput, heading);
+                }
             }
             catch (Exception ex)
             {
@@ -944,6 +1033,23 @@ namespace GroundDisplayRotationPlugin
                 : "Disable Auto-Load";
         }
 
+        private ToolStripMenuItem FindRotationRoot(ToolStripItem item)
+        {
+            ToolStripItem current = item;
+            while (current != null)
+            {
+                ToolStripMenuItem menuItem = current as ToolStripMenuItem;
+                if (menuItem != null && string.Equals(menuItem.Text, "Rotate View", StringComparison.Ordinal))
+                {
+                    return menuItem;
+                }
+
+                current = current.OwnerItem;
+            }
+
+            return null;
+        }
+
         private ToolStripMenuItem FindMenuItemByName(ToolStripMenuItem root, string name)
         {
             if (root == null)
@@ -1145,6 +1251,53 @@ namespace GroundDisplayRotationPlugin
             return null;
         }
 
+        private HeadingInputHost GetHeadingInputFromContainer(ToolStripItem item)
+        {
+            ToolStripMenuItem rotationRoot = FindRotationRoot(item);
+            return GetHeadingInput(rotationRoot);
+        }
+
+        private HeadingSliderHost GetHeadingSlider(ToolStripMenuItem rotationRoot)
+        {
+            if (rotationRoot == null)
+            {
+                return null;
+            }
+
+            foreach (ToolStripItem item in rotationRoot.DropDownItems)
+            {
+                HeadingSliderHost headingSlider = item as HeadingSliderHost;
+                if (headingSlider != null)
+                {
+                    return headingSlider;
+                }
+            }
+
+            return null;
+        }
+
+        private void SetHeadingSliderValue(HeadingInputHost headingInput, int heading)
+        {
+            HeadingSliderHost sliderHost = GetHeadingSliderForInput(headingInput);
+            if (sliderHost == null)
+            {
+                return;
+            }
+
+            sliderHost.SetValueSilently(NormalizeHeading(heading));
+        }
+
+        private HeadingSliderHost GetHeadingSliderForInput(HeadingInputHost headingInput)
+        {
+            if (headingInput == null)
+            {
+                return null;
+            }
+
+            ToolStripMenuItem rotationRoot = FindRotationRoot(headingInput);
+            return GetHeadingSlider(rotationRoot);
+        }
+
         private ToolStripMenuItem GetHeadingLabel(ToolStripMenuItem rotationRoot)
         {
             if (rotationRoot == null)
@@ -1211,6 +1364,12 @@ namespace GroundDisplayRotationPlugin
             if (applyLabelHost != null)
             {
                 applyLabelHost.ApplyStyle(applyLabelForeColor, labelFont);
+            }
+
+            HeadingSliderHost headingSliderHost = GetHeadingSlider(rotationRoot);
+            if (headingSliderHost != null)
+            {
+                headingSliderHost.ApplyStyle(headingInput.InputBackColor, applyLabelForeColor);
             }
 
             styledRotationInputs.Add(headingInput);
@@ -1838,7 +1997,7 @@ namespace GroundDisplayRotationPlugin
                 : base(new BorderedInputControl())
             {
                 AutoSize = false;
-                Size = new Size(120, 26);
+                Size = new Size(208, 26);
                 Margin = new Padding(0, 1, 6, 3);
             }
 
@@ -1865,6 +2024,17 @@ namespace GroundDisplayRotationPlugin
             public void ApplyStyle(Color inputBackColor, Color inputForeColor, Color borderColor, Font font)
             {
                 InputControl.ApplyStyle(inputBackColor, inputForeColor, borderColor, font);
+            }
+
+            public void SetPreferredWidth(int width)
+            {
+                int normalized = Math.Max(120, width);
+                if (Size.Width == normalized)
+                {
+                    return;
+                }
+
+                Size = new Size(normalized, Size.Height);
             }
         }
 
@@ -1908,6 +2078,298 @@ namespace GroundDisplayRotationPlugin
             public Label ApplyLabel
             {
                 get { return (Label)Control; }
+            }
+        }
+
+        private sealed class HeadingSliderHost : ToolStripControlHost
+        {
+            private bool isSynchronizing;
+
+            public HeadingSliderHost()
+                : base(new HeadingSliderControl())
+            {
+                AutoSize = false;
+                Size = new Size(208, 36);
+                Margin = new Padding(0, 0, 6, 2);
+
+                HeadingSlider.Height = 28;
+                HeadingSlider.Width = 208;
+                HeadingSlider.Left = 0;
+                HeadingSlider.Top = 4;
+                BackColor = SystemColors.Control;
+            }
+
+            public HeadingSliderControl HeadingSlider
+            {
+                get { return (HeadingSliderControl)Control; }
+            }
+
+            public bool IsSynchronizing
+            {
+                get { return isSynchronizing; }
+            }
+
+            public void SetValueSilently(int heading)
+            {
+                int normalized = NormalizeHeading(heading);
+                if (HeadingSlider.Value == normalized)
+                {
+                    return;
+                }
+
+                isSynchronizing = true;
+                try
+                {
+                    HeadingSlider.Value = normalized;
+                }
+                finally
+                {
+                    isSynchronizing = false;
+                }
+            }
+
+            public void ApplyStyle(Color backColor, Color foreColor)
+            {
+                BackColor = backColor;
+                HeadingSlider.ApplyStyle(backColor, foreColor);
+            }
+
+            public void SetPreferredWidth(int width)
+            {
+                int normalized = Math.Max(120, width);
+                if (Size.Width != normalized)
+                {
+                    Size = new Size(normalized, Size.Height);
+                }
+
+                if (HeadingSlider.Width != normalized)
+                {
+                    HeadingSlider.Width = normalized;
+                }
+            }
+        }
+
+        private sealed class HeadingSliderControl : Control
+        {
+            private int value;
+            private bool isDragging;
+            private Color trackColor = Color.FromArgb(166, 166, 166);
+            private Color tickColor = Color.FromArgb(140, 140, 140);
+            private Color thumbColor = Color.FromArgb(0, 120, 215);
+            private Color thumbBorderColor = Color.FromArgb(0, 84, 153);
+
+            public HeadingSliderControl()
+            {
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+                TabStop = true;
+                Size = new Size(112, 28);
+                BackColor = SystemColors.Control;
+            }
+
+            public event EventHandler ValueChanged;
+
+            public int Value
+            {
+                get { return value; }
+                set { SetValue(value, true); }
+            }
+
+            public void ApplyStyle(Color backColor, Color foreColor)
+            {
+                BackColor = backColor;
+                ForeColor = foreColor;
+
+                trackColor = Blend(backColor, foreColor, 0.38f);
+                tickColor = Blend(backColor, foreColor, 0.26f);
+                thumbColor = foreColor;
+                thumbBorderColor = ControlPaint.Dark(foreColor, 0.35f);
+                Invalidate();
+            }
+
+            private static Color Blend(Color first, Color second, float secondRatio)
+            {
+                float clamped = Math.Max(0f, Math.Min(1f, secondRatio));
+                float firstRatio = 1f - clamped;
+                int r = (int)(first.R * firstRatio + second.R * clamped);
+                int g = (int)(first.G * firstRatio + second.G * clamped);
+                int b = (int)(first.B * firstRatio + second.B * clamped);
+                return Color.FromArgb(r, g, b);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+
+                e.Graphics.Clear(BackColor);
+
+                Rectangle trackRect = GetTrackRectangle();
+                using (SolidBrush trackBrush = new SolidBrush(trackColor))
+                {
+                    e.Graphics.FillRectangle(trackBrush, trackRect);
+                }
+
+                using (Pen tickPen = new Pen(tickColor))
+                {
+                    for (int heading = 0; heading <= 359; heading += 30)
+                    {
+                        int x = ValueToX(heading);
+                        int tickTop = trackRect.Bottom + 2;
+                        int tickBottom = tickTop + (heading % 90 == 0 ? 6 : 4);
+                        e.Graphics.DrawLine(tickPen, x, tickTop, x, tickBottom);
+                    }
+                }
+
+                Rectangle thumbRect = GetThumbRectangle();
+                using (SolidBrush thumbBrush = new SolidBrush(thumbColor))
+                {
+                    e.Graphics.FillRectangle(thumbBrush, thumbRect);
+                }
+
+                using (Pen thumbPen = new Pen(thumbBorderColor))
+                {
+                    e.Graphics.DrawRectangle(thumbPen, thumbRect);
+                }
+
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (e.Button != MouseButtons.Left)
+                {
+                    return;
+                }
+
+                Focus();
+                isDragging = true;
+                Capture = true;
+                SetValue(XToValue(e.X), true);
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                base.OnMouseMove(e);
+                if (!isDragging)
+                {
+                    return;
+                }
+
+                SetValue(XToValue(e.X), true);
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                base.OnMouseUp(e);
+                if (e.Button == MouseButtons.Left)
+                {
+                    isDragging = false;
+                    Capture = false;
+                }
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                base.OnKeyDown(e);
+                switch (e.KeyCode)
+                {
+                    case Keys.Left:
+                    case Keys.Down:
+                        SetValue(Value - 1, true);
+                        e.Handled = true;
+                        break;
+                    case Keys.Right:
+                    case Keys.Up:
+                        SetValue(Value + 1, true);
+                        e.Handled = true;
+                        break;
+                    case Keys.PageDown:
+                        SetValue(Value - 5, true);
+                        e.Handled = true;
+                        break;
+                    case Keys.PageUp:
+                        SetValue(Value + 5, true);
+                        e.Handled = true;
+                        break;
+                    case Keys.Home:
+                        SetValue(0, true);
+                        e.Handled = true;
+                        break;
+                    case Keys.End:
+                        SetValue(359, true);
+                        e.Handled = true;
+                        break;
+                }
+            }
+
+            protected override void OnMouseWheel(MouseEventArgs e)
+            {
+                base.OnMouseWheel(e);
+                SetValue(Value + (e.Delta > 0 ? 1 : -1), true);
+            }
+
+            private void SetValue(int rawValue, bool notify)
+            {
+                int clamped = Math.Max(0, Math.Min(359, rawValue));
+                if (clamped == value)
+                {
+                    return;
+                }
+
+                value = clamped;
+                Invalidate();
+
+                if (notify)
+                {
+                    EventHandler handler = ValueChanged;
+                    if (handler != null)
+                    {
+                        handler(this, EventArgs.Empty);
+                    }
+                }
+            }
+
+            private Rectangle GetTrackRectangle()
+            {
+                int left = 0;
+                int width = Math.Max(20, Width);
+                int top = 9;
+                int height = 3;
+                return new Rectangle(left, top, width, height);
+            }
+
+            private Rectangle GetThumbRectangle()
+            {
+                int thumbWidth = 12;
+                int thumbHeight = 16;
+                int centerX = ValueToX(Value);
+                int x = centerX - (thumbWidth / 2);
+                int y = 2;
+                return new Rectangle(x, y, thumbWidth, thumbHeight);
+            }
+
+            private int ValueToX(int heading)
+            {
+                Rectangle trackRect = GetTrackRectangle();
+                if (trackRect.Width <= 1)
+                {
+                    return trackRect.Left;
+                }
+
+                double proportion = heading / 359.0;
+                return trackRect.Left + (int)Math.Round(proportion * (trackRect.Width - 1));
+            }
+
+            private int XToValue(int x)
+            {
+                Rectangle trackRect = GetTrackRectangle();
+                if (trackRect.Width <= 1)
+                {
+                    return 0;
+                }
+
+                int clampedX = Math.Max(trackRect.Left, Math.Min(trackRect.Right - 1, x));
+                double proportion = (double)(clampedX - trackRect.Left) / (trackRect.Width - 1);
+                return (int)Math.Round(proportion * 359.0);
             }
         }
 
