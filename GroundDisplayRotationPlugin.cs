@@ -21,6 +21,7 @@ namespace GroundDisplayRotationPlugin
     public class GroundDisplayRotationPlugin : IPlugin
     {
         private const string SavedHeadingsMenuKey = "SavedHeadingsMenu";
+        private const string SaveHeadingMenuKey = "SaveHeadingMenu";
         private const string ClearAutoApplyMenuKey = "ClearAutoApplyMenu";
 
         private readonly List<ToolStripMenuItem> resetItems = new List<ToolStripMenuItem>();
@@ -35,7 +36,7 @@ namespace GroundDisplayRotationPlugin
 
         public string Name
         {
-            get { return "Ground Display Rotation"; }
+            get { return "Ground Rotation"; }
         }
 
         public GroundDisplayRotationPlugin()
@@ -250,7 +251,10 @@ namespace GroundDisplayRotationPlugin
                 savedHeadingsMenu.ShowCheckMargin = false;
             }
 
-            var saveHeadingItem = new ToolStripMenuItem("Save Current Orientation");
+            var saveHeadingItem = new ToolStripMenuItem("Save Current Orientation")
+            {
+                Name = SaveHeadingMenuKey
+            };
             saveHeadingItem.Click += SaveHeadingItem_Click;
 
             var clearAutoApplyItem = new ToolStripMenuItem("Disable Auto-Load")
@@ -329,6 +333,7 @@ namespace GroundDisplayRotationPlugin
 
             headingInput.InputTextBox.Text = prefilledAngle.ToString("D3");
             SetHeadingSliderValue(headingInput, prefilledAngle);
+            UpdateSaveHeadingMenuState(rotationRoot, groundControl);
             PopulateSavedHeadingsMenu(rotationRoot, groundControl);
             UpdateAutoApplyMenuState(rotationRoot, groundControl);
             EnsureHeadingInputStyled(ownerForm, rotationRoot, headingInput, false);
@@ -1012,6 +1017,20 @@ namespace GroundDisplayRotationPlugin
 
                 savedHeadingsMenu.DropDownItems.Add(headingItem);
             }
+        }
+
+        private void UpdateSaveHeadingMenuState(ToolStripMenuItem rotationRoot, object groundControl)
+        {
+            ToolStripMenuItem saveMenu = FindMenuItemByName(rotationRoot, SaveHeadingMenuKey);
+            if (saveMenu == null)
+            {
+                return;
+            }
+
+            string aerodromeKey;
+            bool hasAerodrome = TryGetAerodromeKey(groundControl, out aerodromeKey);
+            saveMenu.Enabled = hasAerodrome;
+            saveMenu.ToolTipText = hasAerodrome ? string.Empty : "No aerodrome selected.";
         }
 
         private void UpdateAutoApplyMenuState(ToolStripMenuItem rotationRoot, object groundControl)
