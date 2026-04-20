@@ -36,22 +36,19 @@ The default rotations in the Australia profile match the primary aerodrome posit
 
 ## Install
 
-1. Copy `bin\Release\GroundDisplayRotationPlugin.dll` to your vatSys plugin folder.
-   - Usually: `C:\Program Files (x86)\vatSys\bin\Plugins`
-2. Restart vatSys.
-3. Open a Ground Display (ASD) window.
-4. Open `Tools > Rotate View`.
+1. Download the latest [release](https://github.com/mattk04/vatsys-rotation-plugin/releases/latest).
+2. Unblock the downloaded zip file (**Properties** > **Unblock** > **Apply**).
+3. Unzip the unblocked file and copy the **GroundRotation** folder to your vatSys Plugins folder.
    
 ## Build
 
 1. Open `GroundDisplayRotationPlugin.csproj` in Visual Studio or MSBuild.
 2. Build the project in `Release` mode.
+3. Copy `bin\Release\GroundDisplayRotationPlugin.dll` to your vatSys plugin folder for local testing.
 
 If you are using the local MSBuild on Windows, run:
 
 ```powershell
 & 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe' .\GroundDisplayRotationPlugin.csproj /p:Configuration=Release
 ```
-- The project currently references `C:\Program Files (x86)\vatSys\bin\vatSys.exe`.
-- If your vatSys installation path is different, update `GroundDisplayRotationPlugin.csproj`.
-- The plugin targets .NET Framework 4.7.2 and is built as `x86`.
+- The project currently references `C:\Program Files (x86)\vatSys\bin\vatSys.exe`. If your vatSys installation path is different, update `GroundDisplayRotationPlugin.csproj`.
