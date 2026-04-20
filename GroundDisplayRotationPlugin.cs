@@ -361,6 +361,8 @@ namespace GroundDisplayRotationPlugin
 
         private void UpdateInlineControlWidths(ToolStripMenuItem rotationRoot)
         {
+            const int maxInlineControlWidth = 236;
+
             if (rotationRoot == null)
             {
                 return;
@@ -392,6 +394,7 @@ namespace GroundDisplayRotationPlugin
 
             int targetWidth = dropDownWidth - (leftInset * 2);
             targetWidth = Math.Max(120, targetWidth);
+            targetWidth = Math.Min(maxInlineControlWidth, targetWidth);
 
             headingInput.SetPreferredWidth(targetWidth);
             headingSlider.SetPreferredWidth(targetWidth);
@@ -2377,7 +2380,7 @@ namespace GroundDisplayRotationPlugin
         {
             private readonly TextBox innerTextBox = new TextBox();
             private Color borderColor = Color.Black;
-            private readonly Color focusBorderColor = Color.FromArgb(0, 232, 255);
+            private readonly Color focusBorderColor = Color.FromArgb(73, 214, 255);
             private bool hasFocus;
 
             public BorderedInputControl()
@@ -2387,7 +2390,7 @@ namespace GroundDisplayRotationPlugin
                 Size = new Size(120, 26);
 
                 innerTextBox.BorderStyle = BorderStyle.None;
-                innerTextBox.Location = new Point(5, 4);
+                innerTextBox.Location = new Point(4, 4);
                 innerTextBox.Width = Width - 8;
                 innerTextBox.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
                 innerTextBox.Enter += InnerTextBox_FocusChanged;
@@ -2473,7 +2476,7 @@ namespace GroundDisplayRotationPlugin
             protected override void OnResize(EventArgs e)
             {
                 base.OnResize(e);
-                innerTextBox.Location = new Point(5, Math.Max(2, (Height - innerTextBox.PreferredHeight) / 2));
+                innerTextBox.Location = new Point(4, Math.Max(2, (Height - innerTextBox.PreferredHeight) / 2));
                 innerTextBox.Width = Math.Max(10, Width - 8);
             }
 
@@ -2484,11 +2487,68 @@ namespace GroundDisplayRotationPlugin
                     e.Graphics.FillRectangle(brush, ClientRectangle);
                 }
 
-                Color paintBorder = hasFocus ? focusBorderColor : borderColor;
-                using (Pen pen = new Pen(paintBorder))
+                DrawInsetBorder(e.Graphics);
+            }
+
+            private void DrawInsetBorder(Graphics graphics)
+            {
+                Rectangle outer = new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
+                if (outer.Width < 2 || outer.Height < 2)
                 {
-                    e.Graphics.DrawRectangle(pen, 0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
+                    return;
                 }
+
+                if (hasFocus)
+                {
+                    using (Pen focusPen = new Pen(focusBorderColor))
+                    {
+                        graphics.DrawRectangle(focusPen, outer);
+                    }
+                    return;
+                }
+
+                Color outerTopLeft = ControlPaint.Dark(BackColor, 0.12f);
+                Color outerBottomRight = ControlPaint.Light(BackColor, 0.18f);
+                ControlPaint.DrawBorder(
+                    graphics,
+                    outer,
+                    outerTopLeft,
+                    1,
+                    ButtonBorderStyle.Solid,
+                    outerTopLeft,
+                    1,
+                    ButtonBorderStyle.Solid,
+                    outerBottomRight,
+                    1,
+                    ButtonBorderStyle.Solid,
+                    outerBottomRight,
+                    1,
+                    ButtonBorderStyle.Solid);
+
+                Rectangle inner = Rectangle.Inflate(outer, -1, -1);
+                if (inner.Width < 2 || inner.Height < 2)
+                {
+                    return;
+                }
+
+                Color topLeftInner = BackColor;
+                Color bottomRightInner = ControlPaint.LightLight(BackColor);
+
+                ControlPaint.DrawBorder(
+                    graphics,
+                    inner,
+                    topLeftInner,
+                    1,
+                    ButtonBorderStyle.Solid,
+                    topLeftInner,
+                    1,
+                    ButtonBorderStyle.Solid,
+                    bottomRightInner,
+                    1,
+                    ButtonBorderStyle.Solid,
+                    bottomRightInner,
+                    1,
+                    ButtonBorderStyle.Solid);
             }
         }
 

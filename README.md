@@ -6,7 +6,7 @@ This plugin adds a `Rotate View` submenu under `Tools` in Ground (ASMGCS) window
 
 From the menu, controllers can:
 
-- Enter a magnetic heading from `000` to `359` to orient the ground window.
+- Enter a magnetic heading from `000` to `359` (using a text input or slider control) to orient the ground window.
 - Use `Save Current Orientation` to save the current display orientation for the current aerodrome, with an optional label.
 - Use `Saved Orientations` to load saved orientations for the current aerodrome.
 - Set a particular orientation to load automatically every time an aerodrome is selected, through the `auto-load` system.
