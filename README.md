@@ -21,10 +21,6 @@ Saved orientations and auto-load values are stored in:
 ### Why use it?
 The default rotations of the ground map at each location are generally sufficient for most needs. At some locations, however, it may be beneficial to rotate the display.
 
-#### Maximise Screen Real-estate
-Better fit awkward aerodromes into whatever space you have left on your monitor.
-<br><img width="700" alt="sy3" src="https://github.com/user-attachments/assets/e22a024d-268b-4921-938d-0ed20474bcee" />
-
 #### Align Ground Windows with the Air Window while Top Down
 Some locations like YBRM have a near 180 degree rotation between the air display and ground display by default. Rotate the display to be north-up, to make it intiutive which parts of the ground display interact with the air display.
 <br><img width="700" alt="cb" src="https://github.com/user-attachments/assets/df6c1d43-7452-4e58-aed3-c8c560b6a042" />
@@ -32,6 +28,10 @@ Some locations like YBRM have a near 180 degree rotation between the air display
 #### Match Tower View while Controlling Specific Aerodrome Positions
 The default rotations in the Australia profile match the primary aerodrome position but when operating secondary positions, it may be beneficial to rotate the ground display to match the view out the window. E.g. Brisbane ADC West:
 <br><img width="700" alt="bn" src="https://github.com/user-attachments/assets/e3c41e16-6f36-4f0a-875f-0cc1f5f7ac60" />
+
+#### Maximise Screen Real-estate
+Better fit awkward aerodromes into whatever space you have left on your monitor.
+<br><img width="700" alt="sy3" src="https://github.com/user-attachments/assets/e22a024d-268b-4921-938d-0ed20474bcee" />
 
 
 ## Install
