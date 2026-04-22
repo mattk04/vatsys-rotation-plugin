@@ -4,7 +4,7 @@
 
 This plugin adds a `Rotate View` submenu under `Tools` in Ground (ASMGCS) windows, allowing controllers to dynamically rotate each ground display as required.
 
-<img width="700" alt="plugin" src="https://github.com/user-attachments/assets/0c8eb38e-e8c5-4e17-bfd8-7945dcc6c229" />
+<img width="850" alt="plugin" src="https://github.com/user-attachments/assets/0c8eb38e-e8c5-4e17-bfd8-7945dcc6c229" />
 
 
 From the menu, controllers can:
